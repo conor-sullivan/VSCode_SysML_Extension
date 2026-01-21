@@ -9549,11 +9549,26 @@ export class VisualizationPanel {
             const diagram = data.diagrams[diagramIndex];
 
             // Ensure all actions have id and name for reliable processing
-            const actions = (diagram.actions || []).map((action, idx) => ({
+            // Filter out nested actions (those with a parent) - they will be shown inside their container
+            const allActions = (diagram.actions || []).map((action, idx) => ({
                 ...action,
                 id: action.id || action.name || 'action_' + idx,
                 name: action.name || action.id || 'Action ' + (idx + 1)
             }));
+
+            // Separate top-level actions from nested ones
+            const actions = allActions.filter(action => !action.parent);
+            const nestedActions = allActions.filter(action => action.parent);
+
+            // Build map of parent -> children for rendering children inside containers
+            const containerChildren = new Map();
+            nestedActions.forEach(action => {
+                if (!containerChildren.has(action.parent)) {
+                    containerChildren.set(action.parent, []);
+                }
+                containerChildren.get(action.parent).push(action);
+            });
+
             let flows = diagram.flows || [];
 
             // If no explicit flows, create implicit flows between consecutive actions
@@ -9640,6 +9655,30 @@ export class VisualizationPanel {
                 actionsByLevel.get(level).push(action);
             });
 
+            // Helper to compute action height (accounting for container children)
+            const childPadding = 10;
+            const childActionHeight = 35;
+            const childSpacing = 8;
+            function getActionHeight(action) {
+                const children = containerChildren.get(action.name || action.id);
+                if (children && children.length > 0) {
+                    return 30 + children.length * (childActionHeight + childSpacing) + childPadding;
+                }
+                return actionHeight;
+            }
+
+            // Compute cumulative Y positions for each level (accounting for variable action heights)
+            const levelYPositions = new Map();
+            const sortedLevels = Array.from(actionsByLevel.keys()).sort((a, b) => a - b);
+            let cumulativeY = startY;
+            sortedLevels.forEach(level => {
+                levelYPositions.set(level, cumulativeY);
+                // Find max height of actions at this level
+                const actionsAtLevel = actionsByLevel.get(level) || [];
+                const maxHeightAtLevel = Math.max(...actionsAtLevel.map(a => getActionHeight(a)), actionHeight);
+                cumulativeY += maxHeightAtLevel + verticalSpacing - actionHeight; // Adjust spacing
+            });
+
             // Position actions in grid layout
             let laneIndex = 0;
             const lanePositions = new Map();
@@ -9653,7 +9692,7 @@ export class VisualizationPanel {
                         const level = levels.get(action.id) || 0;
                         actionPositions.set(action.id, {
                             x: laneX + (swimLaneWidth - actionWidth) / 2,
-                            y: startY + level * verticalSpacing,
+                            y: levelYPositions.get(level) || startY + level * verticalSpacing,
                             action: action
                         });
                     });
@@ -9685,7 +9724,7 @@ export class VisualizationPanel {
 
                         actionPositions.set(action.id, {
                             x: noLaneX + (swimLaneWidth / 2) - centerOffset + positionInLevel * (actionWidth + horizontalSpacing),
-                            y: startY + level * verticalSpacing,
+                            y: levelYPositions.get(level) || startY + level * verticalSpacing,
                             action: action
                         });
                     });
@@ -9709,9 +9748,10 @@ export class VisualizationPanel {
                     } else {
                         // Vertical (default): levels go top-to-bottom, actions spread horizontally
                         const centerOffset = (totalAtLevel - 1) * (actionWidth + horizontalSpacing) / 2;
+                        const yPos = levelYPositions.get(level) || startY + level * verticalSpacing;
                         actionPositions.set(action.id, {
                             x: width / 2 - centerOffset + positionInLevel * (actionWidth + horizontalSpacing),
-                            y: startY + level * verticalSpacing,
+                            y: yPos,
                             action: action
                         });
                     }
@@ -9721,7 +9761,9 @@ export class VisualizationPanel {
             // Draw swim lanes if present
             if (swimLanes.size > 0) {
                 const maxLevel = Math.max(...Array.from(levels.values()), 0);
-                const laneHeight = startY + (maxLevel + 1) * verticalSpacing + 40;
+                // Calculate lane height accounting for all level positions
+                const lastLevelY = levelYPositions.get(maxLevel) || startY + maxLevel * verticalSpacing;
+                const laneHeight = lastLevelY + 100;
 
                 lanePositions.forEach((pos, laneName) => {
                     g.append('rect')
@@ -10035,17 +10077,34 @@ export class VisualizationPanel {
                             .style('user-select', 'none');
                     }
                 } else {
-                    // Rounded rectangle for regular actions
+                    // Check if this is a container action with children
+                    const children = containerChildren.get(actionName);
+                    const isContainer = children && children.length > 0;
+
+                    // Calculate container dimensions based on children
+                    let containerWidth = actionWidth;
+                    let containerHeight = actionHeight;
+                    const childPadding = 10;
+                    const childActionHeight = 35;
+                    const childSpacing = 8;
+
+                    if (isContainer) {
+                        // Make container wider and taller to fit children
+                        containerWidth = actionWidth + 20;
+                        containerHeight = 30 + children.length * (childActionHeight + childSpacing) + childPadding;
+                    }
+
+                    // Rounded rectangle for regular actions or container actions
                     actionElement.append('rect')
-                        .attr('width', actionWidth)
-                        .attr('height', actionHeight)
+                        .attr('width', containerWidth)
+                        .attr('height', containerHeight)
                         .attr('rx', 8)
                         .style('fill', 'var(--vscode-editor-background)')
-                        .style('stroke', 'var(--vscode-charts-blue)')
-                        .style('stroke-width', '2px');
+                        .style('stroke', isContainer ? 'var(--vscode-charts-purple)' : 'var(--vscode-charts-blue)')
+                        .style('stroke-width', isContainer ? '3px' : '2px');
 
                     // Action name - truncate to fit within box (approx 24 chars for 220px width at 13px font)
-                    const maxChars = 24;
+                    const maxChars = isContainer ? 28 : 24;
                     const displayName = truncateToFit(actionName, maxChars);
 
                     // Use smaller font for longer names
@@ -10054,8 +10113,8 @@ export class VisualizationPanel {
                     actionElement.append('text')
                         .attr('class', 'node-name-text')
                         .attr('data-element-name', actionName)
-                        .attr('x', actionWidth / 2)
-                        .attr('y', actionHeight / 2 - 5)
+                        .attr('x', containerWidth / 2)
+                        .attr('y', isContainer ? 18 : containerHeight / 2 - 5)
                         .attr('text-anchor', 'middle')
                         .text(displayName)
                         .style('font-size', fontSize)
@@ -10063,11 +10122,51 @@ export class VisualizationPanel {
                         .style('fill', 'var(--vscode-editor-foreground)')
                         .style('user-select', 'none');
 
-                    // Action kind - only show if not redundant
-                    if (actionKind !== 'action' && actionKind !== displayName.toLowerCase()) {
+                    // Render children inside container actions
+                    if (isContainer) {
+                        let childY = 30;
+                        children.forEach((child, childIdx) => {
+                            const childName = child.name || child;
+                            const childDisplayName = truncateToFit(childName, 22);
+
+                            // Child action background
+                            actionElement.append('rect')
+                                .attr('x', childPadding)
+                                .attr('y', childY)
+                                .attr('width', containerWidth - 2 * childPadding)
+                                .attr('height', childActionHeight)
+                                .attr('rx', 4)
+                                .style('fill', 'var(--vscode-editor-inactiveSelectionBackground)')
+                                .style('stroke', 'var(--vscode-charts-blue)')
+                                .style('stroke-width', '1px')
+                                .style('cursor', 'pointer')
+                                .on('click', function(event) {
+                                    event.stopPropagation();
+                                    handleActionClick(child);
+                                });
+
+                            // Child action name
+                            actionElement.append('text')
+                                .attr('class', 'node-name-text')
+                                .attr('data-element-name', childName)
+                                .attr('x', containerWidth / 2)
+                                .attr('y', childY + childActionHeight / 2 + 4)
+                                .attr('text-anchor', 'middle')
+                                .text(childDisplayName)
+                                .style('font-size', '11px')
+                                .style('fill', 'var(--vscode-editor-foreground)')
+                                .style('pointer-events', 'none')
+                                .style('user-select', 'none');
+
+                            childY += childActionHeight + childSpacing;
+                        });
+                    }
+
+                    // Action kind - only show if not redundant and not a container
+                    if (!isContainer && actionKind !== 'action' && actionKind !== displayName.toLowerCase()) {
                         actionElement.append('text')
-                            .attr('x', actionWidth / 2)
-                            .attr('y', actionHeight / 2 + 12)
+                            .attr('x', containerWidth / 2)
+                            .attr('y', containerHeight / 2 + 12)
                             .attr('text-anchor', 'middle')
                             .text('«' + truncateToFit(actionKind, 14) + '»')
                             .style('font-size', '9px')
@@ -10078,7 +10177,7 @@ export class VisualizationPanel {
                     // Double-click for inline edit on regular actions
                     actionElement.on('dblclick', function(event) {
                         event.stopPropagation();
-                        startInlineEdit(d3.select(this), actionName, pos.x, pos.y, actionWidth);
+                        startInlineEdit(d3.select(this), actionName, pos.x, pos.y, containerWidth);
                     });
                 }
             });

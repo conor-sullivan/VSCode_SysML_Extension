@@ -275,6 +275,8 @@ export interface ActivityAction {
     subActions?: ActivityAction[];  // For composite actions
     isDefinition?: boolean;         // action def vs action usage
     range?: vscode.Range;
+    parent?: string;                // Parent container action name (for nested actions)
+    children?: string[];            // Child action names (for container actions)
 }
 
 export interface DecisionNode {
@@ -1313,8 +1315,43 @@ export class SysMLParser {
         // Track all declared actions and nodes for flow resolution
         const declaredNodes: Map<string, { type: string, range?: vscode.Range }> = new Map();
 
-        // First pass: Extract all action declarations (including quoted names)
-        // Updated pattern to handle multi-line action bodies: action name { or action name;
+        // First pass: Extract all action declarations, tracking parent-child relationships
+        // We need to identify container actions (with braces) and their nested children
+        const containerActionsWithChildren: Map<string, string[]> = new Map();
+
+        // Pattern to find container actions with nested actions
+        // Matches: action name { ... action childName ... }
+        const containerPattern = /(?:then\s+)?action\s+(?:'([^']+)'|(\w+))(?:\s*:\s*[^{;\n]*)?\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/gm;
+        let containerMatch;
+        while ((containerMatch = containerPattern.exec(body)) !== null) {
+            const containerName = containerMatch[1] || containerMatch[2];
+            const containerBody = containerMatch[3];
+            if (containerName && containerBody) {
+                // Find nested action declarations within this container
+                const nestedPattern = /action\s+(?:'([^']+)'|(\w+))/g;
+                let nestedMatch;
+                const children: string[] = [];
+                while ((nestedMatch = nestedPattern.exec(containerBody)) !== null) {
+                    const childName = nestedMatch[1] || nestedMatch[2];
+                    if (childName && childName !== 'def') {
+                        children.push(childName);
+                    }
+                }
+                if (children.length > 0) {
+                    containerActionsWithChildren.set(containerName, children);
+                    if (DEBUG_ACTIVITY_PARSING) console.log(`  → Found container action "${containerName}" with children: ${children.join(', ')}`);
+                }
+            }
+        }
+
+        // Build set of all nested action names (to exclude from top-level)
+        const nestedActionNames = new Set<string>();
+        containerActionsWithChildren.forEach(children => {
+            children.forEach(child => nestedActionNames.add(child));
+        });
+
+        // Second sub-pass: Extract all action declarations (including quoted names)
+        // But mark nested actions appropriately
         const actionDeclPattern = /(?:^|\n)\s*(?:then\s+)?action\s+(?:'([^']+)'|(\w+))(?:\s*:\s*[^{;\n]*)?(?:\s*[{;])?/gm;
         let match;
         while ((match = actionDeclPattern.exec(body)) !== null) {
@@ -1325,13 +1362,35 @@ export class SysMLParser {
                 const range = new vscode.Range(startPos, endPos);
 
                 declaredNodes.set(actionName, { type: 'action', range });
+
+                // Find parent if this is a nested action
+                let parentAction: string | undefined;
+                containerActionsWithChildren.forEach((children, parent) => {
+                    if (children.includes(actionName)) {
+                        parentAction = parent;
+                    }
+                });
+
+                // Check if this is a container action
+                const childActions = containerActionsWithChildren.get(actionName);
+
                 actions.push({
                     name: actionName,
                     type: 'action',
                     range,
-                    isDefinition: false
+                    isDefinition: false,
+                    parent: parentAction,
+                    children: childActions
                 });
-                if (DEBUG_ACTIVITY_PARSING) console.log(`  → Found action declaration: "${actionName}"`);
+                if (DEBUG_ACTIVITY_PARSING) {
+                    if (parentAction) {
+                        console.log(`  → Found nested action declaration: "${actionName}" (parent: ${parentAction})`);
+                    } else if (childActions) {
+                        console.log(`  → Found container action declaration: "${actionName}" with ${childActions.length} children`);
+                    } else {
+                        console.log(`  → Found action declaration: "${actionName}"`);
+                    }
+                }
             }
         }
 
