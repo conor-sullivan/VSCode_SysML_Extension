@@ -37,7 +37,7 @@ export class VisualizationPanel {
                         this.logWebviewMessage(message.level, message.args);
                         break;
                     case 'jumpToElement':
-                        this.jumpToElement(message.elementName, message.skipCentering);
+                        this.jumpToElement(message.elementName, message.skipCentering, message.parentContext);
                         break;
                     case 'renameElement':
                         this.renameElement(message.oldName, message.newName);
@@ -270,12 +270,24 @@ export class VisualizationPanel {
         }
     }
 
-    private async jumpToElement(elementName: string, skipCentering: boolean = false) {
+    private async jumpToElement(elementName: string, skipCentering: boolean = false, parentContext?: string) {
         this._isNavigating = true; // Set navigation flag
 
-        let element = this._parser.findElement(elementName);
+        let element: SysMLElement | undefined;
 
-        // If not found in map, try searching recursively through the tree
+        // If parent context is provided, search within that parent first
+        if (parentContext) {
+            const resolutionResult = await this._parser.parseWithSemanticResolution(this._document);
+            const allElements = this._parser.convertEnrichedToSysMLElements(resolutionResult.elements);
+            element = this.findElementInParent(elementName, parentContext, allElements);
+        }
+
+        // Fall back to regular search if not found in parent context
+        if (!element) {
+            element = this._parser.findElement(elementName);
+        }
+
+        // If still not found, try searching recursively through the tree
         if (!element) {
             // Parse document to get all elements for recursive search
             const resolutionResult = await this._parser.parseWithSemanticResolution(this._document);
@@ -351,6 +363,20 @@ export class VisualizationPanel {
                     return found;
                 }
             }
+        }
+        return undefined;
+    }
+
+    /**
+     * Find an element within a specific parent context.
+     * This is used when the same element name exists in multiple places (e.g., transmitStatus in different action defs).
+     */
+    private findElementInParent(elementName: string, parentName: string, elements: SysMLElement[]): SysMLElement | undefined {
+        // First, find the parent element
+        const parent = this.findElementRecursive(parentName, elements);
+        if (parent && parent.children) {
+            // Search for the element within the parent's children
+            return this.findElementRecursive(elementName, parent.children);
         }
         return undefined;
     }
@@ -1215,6 +1241,7 @@ export class VisualizationPanel {
         let currentData = null;
         let currentView = 'elk';  // General View as default
         let selectedDiagramIndex = 0; // Track currently selected diagram for multi-diagram views
+        let selectedDiagramName = null; // Track selected diagram by name to preserve across updates
         let activityDebugLabels = false; // Toggle for showing debug labels on forks/joins in Activity view
         const STRUCTURAL_VIEWS = new Set(['elk', 'hierarchy']);
         const MIN_CANVAS_ZOOM = 0.04;
@@ -2836,8 +2863,9 @@ export class VisualizationPanel {
                     // Update loading message - parsing is done, now rendering
                     showLoading('Rendering diagram...');
 
-                    // Reset diagram/package selector when new data arrives
-                    selectedDiagramIndex = 0;
+                    // Preserve selected diagram by name across updates
+                    // Don't reset selectedDiagramIndex here - let updateDiagramSelector restore it by name
+                    // selectedDiagramIndex will be updated in updateDiagramSelector if the diagram still exists
 
                     currentData = message;
                     filteredData = null; // Reset filter when new data arrives
@@ -4777,6 +4805,7 @@ export class VisualizationPanel {
             if (diagrams.length <= 1) {
                 container.style.display = 'none';
                 selectedDiagramIndex = 0;
+                selectedDiagramName = diagrams.length === 1 ? diagrams[0].name : null;
                 return;
             }
 
@@ -4789,6 +4818,21 @@ export class VisualizationPanel {
             // Update count
             const countEl = document.getElementById('diagram-count');
             if (countEl) countEl.textContent = '(' + diagrams.length + ' available)';
+
+            // Try to restore selection by name if we have a previously selected diagram
+            if (selectedDiagramName) {
+                const matchingIndex = diagrams.findIndex(d => d.name === selectedDiagramName);
+                if (matchingIndex >= 0) {
+                    selectedDiagramIndex = matchingIndex;
+                } else {
+                    // Diagram no longer exists, reset to first
+                    selectedDiagramIndex = 0;
+                    selectedDiagramName = diagrams[0]?.name || null;
+                }
+            } else {
+                // No previous selection, initialize with first diagram
+                selectedDiagramName = diagrams[0]?.name || null;
+            }
 
             // Populate selector
             selector.innerHTML = '';
@@ -4803,6 +4847,7 @@ export class VisualizationPanel {
             // Ensure selected index is valid
             if (selectedDiagramIndex >= diagrams.length) {
                 selectedDiagramIndex = 0;
+                selectedDiagramName = diagrams[0]?.name || null;
                 selector.value = '0';
             }
         }
@@ -9973,11 +10018,14 @@ export class VisualizationPanel {
             }
 
             // Helper function to handle click navigation
+            // Uses diagram.name as parent context to navigate to the correct element
+            // when multiple elements have the same name in different action defs
             function handleActionClick(action) {
                 if (action && action.name) {
                     vscode.postMessage({
                         command: 'jumpToElement',
-                        elementName: action.name
+                        elementName: action.name,
+                        parentContext: diagram.name // Pass the action def name as context
                     });
                 }
             }
@@ -12010,6 +12058,9 @@ export class VisualizationPanel {
         if (diagramSelector) {
             diagramSelector.addEventListener('change', (e) => {
                 selectedDiagramIndex = parseInt(e.target.value, 10) || 0;
+                // Save the selected diagram name for persistence across updates
+                const selectedOption = e.target.options[e.target.selectedIndex];
+                selectedDiagramName = selectedOption ? selectedOption.textContent : null;
                 // Re-render current view with new selection
                 renderVisualization(currentView);
             });

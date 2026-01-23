@@ -130,130 +130,136 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('sysml.visualizeFolder', async (uri: vscode.Uri) => {
+        vscode.commands.registerCommand('sysml.visualizeFolder', async (uri: vscode.Uri, selectedUris?: vscode.Uri[]) => {
             try {
-                let targetUri = uri;
+                // Handle multi-selection: when multiple items are selected in explorer,
+                // VS Code passes the right-clicked item as first arg and all selected items as second arg
+                let targetUris: vscode.Uri[] = [];
 
-                // If no URI provided, try to get from active editor or selection
-                if (!targetUri) {
+                if (selectedUris && selectedUris.length > 0) {
+                    // Multi-selection case
+                    targetUris = selectedUris;
+                } else if (uri) {
+                    // Single selection case
+                    targetUris = [uri];
+                } else {
+                    // No URI provided, try to get from active editor
                     const editor = vscode.window.activeTextEditor;
                     if (editor) {
-                        targetUri = editor.document.uri;
+                        targetUris = [editor.document.uri];
                     }
                 }
 
-                if (!targetUri) {
+                if (targetUris.length === 0) {
                     vscode.window.showErrorMessage('No folder or file selected for SysML visualization');
                     return;
                 }
 
-                const stat = await vscode.workspace.fs.stat(targetUri);
+                // Collect all .sysml files from all selected folders/files
+                const allSysmlFiles: vscode.Uri[] = [];
+                const folderNames: string[] = [];
 
-                if (stat.type === vscode.FileType.Directory) {
-                    // Handle folder selection - visualize all .sysml files in the folder
-                    const folderUri = targetUri;
+                for (const targetUri of targetUris) {
+                    const stat = await vscode.workspace.fs.stat(targetUri);
 
-                    // Find all .sysml files in the folder
-                    const sysmlFiles = await vscode.workspace.findFiles(
-                        new vscode.RelativePattern(folderUri, '**/*.sysml'),
-                        '**/node_modules/**'
-                    );
+                    if (stat.type === vscode.FileType.Directory) {
+                        // Handle folder - find all .sysml files recursively
+                        const folderName = targetUri.fsPath.substring(targetUri.fsPath.lastIndexOf('/') + 1);
+                        folderNames.push(folderName);
 
-                    if (sysmlFiles.length === 0) {
-                        vscode.window.showInformationMessage('No SysML files found in the selected folder');
-                        return;
-                    }
-
-                    // Read and combine all SysML files
-                    let combinedContent = '';
-                    const fileNames: string[] = [];
-
-                    for (const fileUri of sysmlFiles) {
-                        try {
-                            const content = await vscode.workspace.fs.readFile(fileUri);
-                            const fileName = fileUri.fsPath.substring(fileUri.fsPath.lastIndexOf('/') + 1);
-                            fileNames.push(fileName);
-
-                            combinedContent += `// === ${fileName} ===\n`;
-                            combinedContent += Buffer.from(content).toString('utf8');
-                            combinedContent += '\n\n';
-                        } catch (error) {
-                            console.warn(`Failed to read SysML file ${fileUri.fsPath}:`, error);
-                        }
-                    }
-
-                    if (combinedContent.trim() === '') {
-                        vscode.window.showErrorMessage('Failed to read any SysML files from the folder');
-                        return;
-                    }
-
-                    // Create a virtual document for the combined content
-                    // Use the first actual file as the base document to avoid untitled files
-                    const firstFileDocument = await vscode.workspace.openTextDocument(sysmlFiles[0]);
-
-                    // Create a wrapper that provides combined content but uses the real file URI
-                    // This avoids creating an untitled document
-                    const combinedDocumentProxy = {
-                        getText: () => combinedContent,
-                        uri: firstFileDocument.uri,
-                        languageId: 'sysml',
-                        version: firstFileDocument.version,
-                        lineCount: combinedContent.split('\n').length,
-                        lineAt: (line: number) => firstFileDocument.lineAt(Math.min(line, firstFileDocument.lineCount - 1)),
-                        offsetAt: (position: vscode.Position) => firstFileDocument.offsetAt(position),
-                        positionAt: (offset: number) => firstFileDocument.positionAt(offset),
-                        getWordRangeAtPosition: (position: vscode.Position) => firstFileDocument.getWordRangeAtPosition(position),
-                        validateRange: (range: vscode.Range) => firstFileDocument.validateRange(range),
-                        validatePosition: (position: vscode.Position) => firstFileDocument.validatePosition(position),
-                        fileName: firstFileDocument.fileName,
-                        isUntitled: false,
-                        isDirty: false,
-                        isClosed: false,
-                        eol: firstFileDocument.eol,
-                        encoding: 'utf8',
-                        save: () => Promise.resolve(false)
-                    } as unknown as vscode.TextDocument;
-
-                    // Show ONLY the visualization panel, not the text document
-                    VisualizationPanel.createOrShow(context.extensionUri, parser, combinedDocumentProxy,
-                        `SysML Visualization - ${fileNames.length} files from ${folderUri.fsPath}`);
-
-                    vscode.window.showInformationMessage(
-                        `Visualizing ${fileNames.length} SysML files: ${fileNames.join(', ')}`
-                    );
-                } else {
-                    // Handle single file selection - visualize only the selected file
-                    if (!targetUri.fsPath.endsWith('.sysml')) {
-                        vscode.window.showErrorMessage('Selected file is not a SysML file (.sysml)');
-                        return;
-                    }
-
-                    try {
-                        const fileName = targetUri.fsPath.substring(targetUri.fsPath.lastIndexOf('/') + 1);
-
-                        // Open the actual file document (not untitled) - this doesn't show it
-                        const document = await vscode.workspace.openTextDocument(targetUri);
-
-                        // Show the visualization with the single file
-                        VisualizationPanel.createOrShow(context.extensionUri, parser, document,
-                            `SysML Visualization - ${fileName}`);
-
-                        vscode.window.showInformationMessage(`Visualizing single SysML file: ${fileName}`);
-                    } catch (error) {
-                        vscode.window.showErrorMessage(`Failed to read SysML file: ${error}`);
-                        return;
+                        const sysmlFiles = await vscode.workspace.findFiles(
+                            new vscode.RelativePattern(targetUri, '**/*.sysml'),
+                            '**/node_modules/**'
+                        );
+                        allSysmlFiles.push(...sysmlFiles);
+                    } else if (targetUri.fsPath.endsWith('.sysml')) {
+                        // Handle single .sysml file
+                        allSysmlFiles.push(targetUri);
                     }
                 }
 
+                // Remove duplicates (in case same file is in multiple selected folders)
+                const uniqueFiles = [...new Map(allSysmlFiles.map(f => [f.fsPath, f])).values()];
+
+                if (uniqueFiles.length === 0) {
+                    vscode.window.showInformationMessage('No SysML files found in the selected folders/files');
+                    return;
+                }
+
+                // Read and combine all SysML files
+                let combinedContent = '';
+                const fileNames: string[] = [];
+
+                for (const fileUri of uniqueFiles) {
+                    try {
+                        const content = await vscode.workspace.fs.readFile(fileUri);
+                        const fileName = fileUri.fsPath.substring(fileUri.fsPath.lastIndexOf('/') + 1);
+                        fileNames.push(fileName);
+
+                        combinedContent += `// === ${fileName} ===\n`;
+                        combinedContent += Buffer.from(content).toString('utf8');
+                        combinedContent += '\n\n';
+                    } catch (error) {
+                        console.warn(`Failed to read SysML file ${fileUri.fsPath}:`, error);
+                    }
+                }
+
+                if (combinedContent.trim() === '') {
+                    vscode.window.showErrorMessage('Failed to read any SysML files');
+                    return;
+                }
+
+                // Create a virtual document for the combined content
+                // Use the first actual file as the base document to avoid untitled files
+                const firstFileDocument = await vscode.workspace.openTextDocument(uniqueFiles[0]);
+
+                // Create a wrapper that provides combined content but uses the real file URI
+                // This avoids creating an untitled document
+                const combinedDocumentProxy = {
+                    getText: () => combinedContent,
+                    uri: firstFileDocument.uri,
+                    languageId: 'sysml',
+                    version: firstFileDocument.version,
+                    lineCount: combinedContent.split('\n').length,
+                    lineAt: (line: number) => firstFileDocument.lineAt(Math.min(line, firstFileDocument.lineCount - 1)),
+                    offsetAt: (position: vscode.Position) => firstFileDocument.offsetAt(position),
+                    positionAt: (offset: number) => firstFileDocument.positionAt(offset),
+                    getWordRangeAtPosition: (position: vscode.Position) => firstFileDocument.getWordRangeAtPosition(position),
+                    validateRange: (range: vscode.Range) => firstFileDocument.validateRange(range),
+                    validatePosition: (position: vscode.Position) => firstFileDocument.validatePosition(position),
+                    fileName: firstFileDocument.fileName,
+                    isUntitled: false,
+                    isDirty: false,
+                    isClosed: false,
+                    eol: firstFileDocument.eol,
+                    encoding: 'utf8',
+                    save: () => Promise.resolve(false)
+                } as unknown as vscode.TextDocument;
+
+                // Build title based on selection
+                let title: string;
+                if (folderNames.length > 0) {
+                    title = `SysML Visualization - ${fileNames.length} files from ${folderNames.length} folder(s)`;
+                } else {
+                    title = `SysML Visualization - ${fileNames.length} file(s)`;
+                }
+
+                // Show ONLY the visualization panel, not the text document
+                VisualizationPanel.createOrShow(context.extensionUri, parser, combinedDocumentProxy, title);
+
+                vscode.window.showInformationMessage(
+                    `Visualizing ${fileNames.length} SysML files: ${fileNames.join(', ')}`
+                );
+
             } catch (error) {
-                vscode.window.showErrorMessage(`Failed to visualize SysML folder: ${error}`);
+                vscode.window.showErrorMessage(`Failed to visualize SysML: ${error}`);
                 console.error('Error in sysml.visualizeFolder:', error);
             }
         })
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('sysml.visualizeFolderWithView', async (uri: vscode.Uri) => {
+        vscode.commands.registerCommand('sysml.visualizeFolderWithView', async (uri: vscode.Uri, selectedUris?: vscode.Uri[]) => {
             // Import at runtime to avoid circular dependencies
             const { getRendererDefinitions } = await import('./visualization/renderers');
 
@@ -269,8 +275,8 @@ export function activate(context: vscode.ExtensionContext) {
             });
 
             if (selected) {
-                // Execute visualizeFolder with the selected view
-                await vscode.commands.executeCommand('sysml.visualizeFolder', uri);
+                // Execute visualizeFolder with the selected view, passing multi-selection
+                await vscode.commands.executeCommand('sysml.visualizeFolder', uri, selectedUris);
                 // Then switch to the selected view
                 if (VisualizationPanel.currentPanel) {
                     await vscode.commands.executeCommand('sysml.changeVisualizerView', selected.viewId);
@@ -493,6 +499,16 @@ export function activate(context: vscode.ExtensionContext) {
             }
         })
     );
+
+    // Validate all already-open SysML documents on activation
+    // This ensures diagnostics appear immediately without requiring an edit
+    if (vscode.workspace.getConfiguration('sysml').get('validation.enabled')) {
+        vscode.workspace.textDocuments.forEach(document => {
+            if (document.languageId === 'sysml') {
+                validator.validate(document);
+            }
+        });
+    }
 }
 
 export function getOutputChannel(): vscode.OutputChannel {

@@ -198,14 +198,19 @@ export class SysMLValidator {
             const hasRedefinitionOperator = specializationChain?.includes(':>>') ||
                                            specializationsList.some((s: string) => s.includes(':>>'));
 
-            if (!isRedefinition && !hasRedefinitionOperator && siblingNames.has(element.name)) {
+            // Skip duplicate checking for anonymous/unnamed elements
+            // SysML v2 allows multiple anonymous elements in the same namespace
+            // (e.g., multiple unnamed connections, constraints, etc.)
+            const isAnonymous = element.name === 'unnamed' || element.name === '';
+
+            if (!isRedefinition && !hasRedefinitionOperator && !isAnonymous && siblingNames.has(element.name)) {
                 diagnostics.push(new vscode.Diagnostic(
                     element.range,
                     `Duplicate element name in namespace: ${element.name}`,
                     vscode.DiagnosticSeverity.Warning
                 ));
             }
-            if (!isRedefinition && !hasRedefinitionOperator) {
+            if (!isRedefinition && !hasRedefinitionOperator && !isAnonymous) {
                 siblingNames.add(element.name);
             }
 
