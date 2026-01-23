@@ -460,13 +460,28 @@ export class VisualizationPanel {
         const filters: { [key: string]: string[] } = {
             'PNG Images': ['png'],
             'SVG Images': ['svg'],
-            'PDF Documents': ['pdf'],
             'JSON Files': ['json']
         };
 
+        // Determine default save location: use document folder, workspace folder, or fallback
+        let defaultFolder: vscode.Uri | undefined;
+        if (this._document?.uri?.fsPath) {
+            // Use the folder containing the current document
+            const docPath = this._document.uri.fsPath;
+            const folderPath = docPath.substring(0, docPath.lastIndexOf('/'));
+            defaultFolder = vscode.Uri.file(folderPath);
+        } else if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            // Use the first workspace folder
+            defaultFolder = vscode.workspace.workspaceFolders[0].uri;
+        }
+
+        const defaultUri = defaultFolder
+            ? vscode.Uri.joinPath(defaultFolder, `sysml-model.${format}`)
+            : vscode.Uri.file(`sysml-model.${format}`);
+
         const uri = await vscode.window.showSaveDialog({
             filters: filters,
-            defaultUri: vscode.Uri.file(`sysml-model.${format}`)
+            defaultUri: defaultUri
         });
 
         if (uri) {
@@ -480,14 +495,14 @@ export class VisualizationPanel {
                     // Direct JSON string
                     buffer = Buffer.from(data, 'utf8');
                 }
-            } else if (format === 'pdf') {
-                // For PDF, we'll save the SVG data for now
-                // In a full implementation, this would convert to actual PDF
-                vscode.window.showInformationMessage('PDF export is not fully implemented yet. Saving as SVG instead.');
-                buffer = Buffer.from(data, 'utf8');
             } else {
-                // PNG/SVG - extract from data URL
-                buffer = Buffer.from(data.split(',')[1], 'base64');
+                // PNG/SVG/PDF - all come as data URLs now, extract from base64
+                if (data.startsWith('data:')) {
+                    buffer = Buffer.from(data.split(',')[1], 'base64');
+                } else {
+                    // Fallback for raw data
+                    buffer = Buffer.from(data, 'utf8');
+                }
             }
 
             await vscode.workspace.fs.writeFile(uri, buffer);
@@ -1180,7 +1195,6 @@ export class VisualizationPanel {
                 <div id="export-menu" class="export-menu">
                     <button class="export-menu-item" data-format="png">PNG</button>
                     <button class="export-menu-item" data-format="svg">SVG</button>
-                    <button class="export-menu-item" data-format="pdf">PDF</button>
                     <button class="export-menu-item" data-format="json">JSON</button>
                 </div>
             </div>
@@ -5084,8 +5098,8 @@ export class VisualizationPanel {
                     const mouse = d3.pointer(event, this);
                     const currentTransform = d3.zoomTransform(this);
 
-                    // Calculate zoom factor
-                    const factor = event.deltaY > 0 ? 0.9 : 1.1;
+                    // Calculate zoom factor - larger values for faster zooming
+                    const factor = event.deltaY > 0 ? 0.75 : 1.33;
                     const newScale = Math.min(
                         Math.max(currentTransform.k * factor, MIN_CANVAS_ZOOM),
                         MAX_CANVAS_ZOOM
@@ -8844,20 +8858,125 @@ export class VisualizationPanel {
             });
         }
 
-        function exportPDF() {
-            // For now, convert SVG to PNG and send as PDF request
-            // In a full implementation, this would use a PDF library
-            const svgElement = document.querySelector('#visualization svg');
-            if (!svgElement) {
-                console.error('No SVG element found for PDF export');
-                return;
+        // Helper function to prepare SVG for export by inlining computed color styles
+        function prepareSvgForExport(svgElement) {
+            if (!svgElement) return null;
+
+            // Clone the SVG to avoid modifying the original
+            const clonedSvg = svgElement.cloneNode(true);
+
+            // Get computed background color from the page
+            const bgColor = getComputedStyle(document.body).backgroundColor || '#1e1e1e';
+
+            // Find the main content group to get full content bounds
+            const originalG = svgElement.querySelector('g');
+            let contentBounds = null;
+
+            if (originalG) {
+                try {
+                    contentBounds = originalG.getBBox();
+                } catch (e) {
+                    console.warn('Could not get content bounds');
+                }
             }
 
-            vscode.postMessage({
-                command: 'export',
-                format: 'pdf',
-                data: new XMLSerializer().serializeToString(svgElement)
+            // Calculate full dimensions including all content
+            let fullWidth, fullHeight;
+            const padding = 20;
+
+            if (contentBounds && contentBounds.width > 0) {
+                // Use content bounds to get full diagram size
+                fullWidth = Math.max(contentBounds.x + contentBounds.width + padding, svgElement.clientWidth);
+                fullHeight = Math.max(contentBounds.y + contentBounds.height + padding, svgElement.clientHeight);
+            } else {
+                fullWidth = svgElement.width?.baseVal?.value || svgElement.clientWidth || 800;
+                fullHeight = svgElement.height?.baseVal?.value || svgElement.clientHeight || 600;
+            }
+
+            // Set SVG to full content size and adjust viewBox to show everything
+            clonedSvg.setAttribute('width', fullWidth.toString());
+            clonedSvg.setAttribute('height', fullHeight.toString());
+            clonedSvg.setAttribute('viewBox', '0 0 ' + fullWidth + ' ' + fullHeight);
+
+            // Reset transform on the cloned g to show unzoomed content
+            const clonedG = clonedSvg.querySelector('g');
+            if (clonedG && clonedG.hasAttribute('transform')) {
+                clonedG.removeAttribute('transform');
+            }
+
+            // Resolve CSS variables in style attributes BEFORE adding bgRect
+            // so element indices match between original and clone
+            const elements = clonedSvg.querySelectorAll('*');
+            const originalElements = svgElement.querySelectorAll('*');
+
+            elements.forEach((el, index) => {
+                const origEl = originalElements[index];
+                if (!origEl) return;
+
+                try {
+                    // Get the existing style attribute
+                    const existingStyle = el.getAttribute('style') || '';
+
+                    // Only process if it contains CSS variables
+                    if (existingStyle.includes('var(')) {
+                        const computedStyle = window.getComputedStyle(origEl);
+
+                        // Extract each style property and resolve if needed
+                        const styleProps = existingStyle.split(';').filter(s => s.trim());
+                        const resolvedProps = styleProps.map(prop => {
+                            const colonIdx = prop.indexOf(':');
+                            if (colonIdx === -1) return prop.trim();
+                            const name = prop.substring(0, colonIdx).trim();
+                            const value = prop.substring(colonIdx + 1).trim();
+                            if (value && value.includes('var(')) {
+                                // Get the computed value for this property
+                                const computed = computedStyle.getPropertyValue(name);
+                                if (computed) {
+                                    return name + ': ' + computed;
+                                }
+                            }
+                            return prop.trim();
+                        });
+
+                        el.setAttribute('style', resolvedProps.join('; ') + ';');
+                    }
+
+                    // For rect elements that are containers, make fill transparent
+                    // but keep the stroke visible
+                    const tagName = el.tagName.toLowerCase();
+                    if (tagName === 'rect') {
+                        const computedStyle = window.getComputedStyle(origEl);
+                        const stroke = computedStyle.getPropertyValue('stroke');
+
+                        // If the rect has a stroke (it's a container box), make fill transparent
+                        if (stroke && stroke !== 'none' && stroke !== 'rgba(0, 0, 0, 0)') {
+                            const currentStyle = el.getAttribute('style') || '';
+                            // Replace fill with none to make it transparent
+                            let newStyle = currentStyle.replace(/fill\s*:[^;]+;?/gi, '');
+                            newStyle = newStyle + '; fill: none;';
+                            el.setAttribute('style', newStyle);
+                        }
+                    }
+                } catch (e) {
+                    // Skip elements that can't be styled
+                }
             });
+
+            // Add a background rect as the first child AFTER processing elements
+            const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            bgRect.setAttribute('x', '0');
+            bgRect.setAttribute('y', '0');
+            bgRect.setAttribute('width', fullWidth.toString());
+            bgRect.setAttribute('height', fullHeight.toString());
+            bgRect.setAttribute('fill', bgColor);
+            clonedSvg.insertBefore(bgRect, clonedSvg.firstChild);
+
+            // Add XML namespace if not present
+            if (!clonedSvg.hasAttribute('xmlns')) {
+                clonedSvg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+            }
+
+            return clonedSvg;
         }
 
         function exportJSON() {
@@ -8887,7 +9006,7 @@ export class VisualizationPanel {
                 const pngData = cy.png({
                     output: 'base64uri',
                     full: true,
-                    bg: getComputedStyle(document.body).backgroundColor || '#0d1117'
+                    bg: getComputedStyle(document.body).backgroundColor || '#1e1e1e'
                 });
                 vscode.postMessage({
                     command: 'export',
@@ -8896,25 +9015,49 @@ export class VisualizationPanel {
                 });
                 return;
             }
+
             const svgElement = document.querySelector('#visualization svg');
-            const svgData = new XMLSerializer().serializeToString(svgElement);
+            if (!svgElement) {
+                console.error('No SVG element found for PNG export');
+                return;
+            }
+
+            const preparedSvg = prepareSvgForExport(svgElement);
+            if (!preparedSvg) {
+                console.error('Failed to prepare SVG for export');
+                return;
+            }
+
+            const svgData = new XMLSerializer().serializeToString(preparedSvg);
+
+            // Get dimensions from the prepared SVG
+            const width = parseInt(preparedSvg.getAttribute('width')) || 800;
+            const height = parseInt(preparedSvg.getAttribute('height')) || 600;
+
+            // Use 2x scale for good quality without massive file sizes
+            const scale = 2;
+
             const canvas = document.createElement('canvas');
+            canvas.width = width * scale;
+            canvas.height = height * scale;
+
             const ctx = canvas.getContext('2d');
+            ctx.scale(scale, scale);
+
             const img = new Image();
 
-            canvas.width = svgElement.width.baseVal.value;
-            canvas.height = svgElement.height.baseVal.value;
-
             img.onload = function() {
-                ctx.fillStyle = 'white';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(img, 0, 0);
+                ctx.drawImage(img, 0, 0, width, height);
                 const pngData = canvas.toDataURL('image/png');
                 vscode.postMessage({
                     command: 'export',
                     format: 'png',
                     data: pngData
                 });
+            };
+
+            img.onerror = function(e) {
+                console.error('Failed to load SVG image for PNG export:', e);
             };
 
             img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
@@ -8940,10 +9083,21 @@ export class VisualizationPanel {
                 }
                 return;
             }
+
             const svgElement = document.querySelector('#visualization svg');
-            const svgData = new XMLSerializer().serializeToString(svgElement);
+            if (!svgElement) {
+                console.error('No SVG element found for SVG export');
+                return;
+            }
+
+            const preparedSvg = prepareSvgForExport(svgElement);
+            if (!preparedSvg) {
+                console.error('Failed to prepare SVG for export');
+                return;
+            }
+
+            const svgData = new XMLSerializer().serializeToString(preparedSvg);
             const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-            const svgUrl = URL.createObjectURL(svgBlob);
             const reader = new FileReader();
 
             reader.onloadend = function() {
@@ -8960,7 +9114,6 @@ export class VisualizationPanel {
         // Make all button handler functions globally accessible
         window.exportPNG = exportPNG;
         window.exportSVG = exportSVG;
-        window.exportPDF = exportPDF;
         window.exportJSON = exportJSON;
         window.resetZoom = resetZoom;
         window.zoomToFit = zoomToFit;

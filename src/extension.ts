@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { ModelExplorerProvider } from './explorer/modelExplorerProvider';
 import { SysMLFormatter } from './formatting/formatter';
 import { LibraryService } from './library';
+import { SysMLCompletionProvider } from './navigation/completionProvider';
 import { SysMLDefinitionProvider } from './navigation/definitionProvider';
 import { SysMLDocumentSymbolProvider } from './navigation/symbolProvider';
 import { SysMLParser } from './parser/sysmlParser';
@@ -52,6 +53,15 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.languages.registerDocumentSymbolProvider('sysml', new SysMLDocumentSymbolProvider(parser))
+    );
+
+    // Register completion provider for IntelliSense/autocomplete
+    context.subscriptions.push(
+        vscode.languages.registerCompletionItemProvider(
+            'sysml',
+            new SysMLCompletionProvider(parser),
+            '.', ':', '>' // Trigger characters for member access and specialization
+        )
     );
 
     context.subscriptions.push(
