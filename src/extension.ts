@@ -335,9 +335,43 @@ export function activate(context: vscode.ExtensionContext) {
             const format = await vscode.window.showQuickPick(['PNG', 'SVG'], {
                 placeHolder: 'Select export format'
             });
-            if (format) {
-                VisualizationPanel.currentPanel?.exportVisualization(format);
+            if (!format) {
+                return;
             }
+
+            let scale = 2; // default
+            if (format === 'PNG') {
+                const config = vscode.workspace.getConfiguration('sysml');
+                const defaultScale = config.get<number>('export.defaultScale', 2);
+
+                interface ScaleOption extends vscode.QuickPickItem {
+                    scale: number;
+                }
+
+                const scaleOptions: ScaleOption[] = [
+                    { label: '1x - Original size', scale: 1, description: 'Smallest file size' },
+                    { label: '2x - Double size', scale: 2, description: 'Good quality (default)' },
+                    { label: '3x - Triple size', scale: 3, description: 'High quality' },
+                    { label: '4x - Quadruple size', scale: 4, description: 'Very high quality, larger file' }
+                ];
+
+                // Mark the default option
+                const optionsWithDefault: ScaleOption[] = scaleOptions.map(opt => ({
+                    ...opt,
+                    label: opt.scale === defaultScale ? `${opt.label} ✓` : opt.label
+                }));
+
+                const selectedScale = await vscode.window.showQuickPick<ScaleOption>(optionsWithDefault, {
+                    placeHolder: `Select export resolution (default: ${defaultScale}x)`
+                });
+
+                if (!selectedScale) {
+                    return;
+                }
+                scale = selectedScale.scale;
+            }
+
+            VisualizationPanel.currentPanel?.exportVisualization(format, scale);
         })
     );
 

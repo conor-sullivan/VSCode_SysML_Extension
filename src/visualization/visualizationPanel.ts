@@ -115,8 +115,8 @@ export class VisualizationPanel {
         VisualizationPanel.currentPanel = new VisualizationPanel(panel, extensionUri, parser, document);
     }
 
-    public exportVisualization(format: string) {
-        this._panel.webview.postMessage({ command: 'export', format: format.toLowerCase() });
+    public exportVisualization(format: string, scale: number = 2) {
+        this._panel.webview.postMessage({ command: 'export', format: format.toLowerCase(), scale });
     }
 
     // Simple hash function for content comparison
@@ -750,6 +750,30 @@ export class VisualizationPanel {
             border-bottom-left-radius: 3px;
             border-bottom-right-radius: 3px;
         }
+        .export-submenu-container {
+            position: relative;
+        }
+        .export-submenu-container .export-menu-item::after {
+            content: '▸';
+            float: right;
+            margin-left: 8px;
+        }
+        .export-submenu {
+            display: none;
+            position: absolute;
+            left: 100%;
+            top: 0;
+            background-color: var(--vscode-menu-background);
+            border: 1px solid var(--vscode-menu-border);
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            min-width: 140px;
+            z-index: 10001;
+            padding: 4px;
+        }
+        .export-submenu-container:hover .export-submenu {
+            display: block;
+        }
         .action-btn {
             background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
             color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
@@ -1193,7 +1217,15 @@ export class VisualizationPanel {
             <div class="export-dropdown" style="position: relative; display: inline-block;">
                 <button id="export-btn" class="primary-btn" title="Export diagram">⇓ Export</button>
                 <div id="export-menu" class="export-menu">
-                    <button class="export-menu-item" data-format="png">PNG</button>
+                    <div class="export-submenu-container">
+                        <button class="export-menu-item" data-format="png-parent">PNG</button>
+                        <div class="export-submenu">
+                            <button class="export-menu-item" data-format="png" data-scale="1">1x - Original</button>
+                            <button class="export-menu-item" data-format="png" data-scale="2">2x - Double ✓</button>
+                            <button class="export-menu-item" data-format="png" data-scale="3">3x - Triple</button>
+                            <button class="export-menu-item" data-format="png" data-scale="4">4x - Quadruple</button>
+                        </div>
+                    </div>
                     <button class="export-menu-item" data-format="svg">SVG</button>
                     <button class="export-menu-item" data-format="json">JSON</button>
                 </div>
@@ -2904,7 +2936,7 @@ export class VisualizationPanel {
                     break;
                 case 'export':
                     if (message.format === 'png') {
-                        exportPNG();
+                        exportPNG(message.scale || 2);
                     } else if (message.format === 'svg') {
                         exportSVG();
                     }
@@ -5147,6 +5179,20 @@ export class VisualizationPanel {
                     g.selectAll('.graph-node-group').classed('selected', false);
                     g.selectAll('.hierarchy-cell').classed('selected', false);
                     g.selectAll('.elk-node').classed('selected', false);
+
+                    // Clear IBD connector highlights
+                    g.selectAll('.ibd-connector').each(function() {
+                        const el = d3.select(this);
+                        const origStroke = el.attr('data-original-stroke');
+                        const origWidth = el.attr('data-original-width');
+                        if (origStroke) {
+                            el.style('stroke', origStroke)
+                              .style('stroke-width', origWidth)
+                              .classed('connector-highlighted', false);
+                            el.attr('data-original-stroke', null)
+                              .attr('data-original-width', null);
+                        }
+                    });
                 }
             });
 
@@ -7316,13 +7362,17 @@ export class VisualizationPanel {
                             return;
                         }
 
-                        // Track if this element is a part def or part usage
+                        // Track if this element is a definition or usage for parts, requirements, etc.
                         var isPartDef = typeLower.includes('part') && typeLower.includes('def');
                         var isPartUsage = typeLower.includes('part') && !typeLower.includes('def');
+                        var isRequirementDef = typeLower.includes('requirement') && typeLower.includes('def');
+                        var isRequirementUsage = typeLower.includes('requirement') && !typeLower.includes('def');
+                        var isDefElement = isPartDef || isRequirementDef;
+                        var isUsageElement = isPartUsage || isRequirementUsage;
 
-                        // If we have a parent element and this is a part, add containment relationship
-                        // This captures both def→part and part→part containment
-                        if (parentElement && isPartUsage) {
+                        // If we have a parent element and this is a usage, add containment relationship
+                        // This captures both def→usage and usage→usage containment
+                        if (parentElement && isUsageElement) {
                             partToDefLinks.push({
                                 source: parentElement,
                                 target: el.name,
@@ -7354,7 +7404,8 @@ export class VisualizationPanel {
                         }
                         // Also check typing property (set by parser for typed parts)
                         if (!partType && el.typing) {
-                            partType = el.typing;
+                            // Strip leading colon if present (parser may include it)
+                            partType = el.typing.replace(/^:/, '').trim();
                         }
                         // Check if the element has a colon-separated type in its full definition
                         if (!partType && el.fullText) {
@@ -7371,9 +7422,9 @@ export class VisualizationPanel {
                             });
                         }
 
-                        // Recurse with current element as parent if it's a part def or part usage
-                        // This allows tracking containment for nested parts (e.g., camera.optics)
-                        var nextParent = (isPartDef || isPartUsage) ? el.name : parentElement;
+                        // Recurse with current element as parent if it's a definition or usage
+                        // This allows tracking containment for nested elements (e.g., camera.optics, manageElecLoads.LoadMmgtFly)
+                        var nextParent = (isDefElement || isUsageElement) ? el.name : parentElement;
                         if (el.children) collectPartToDefLinks(el.children, nextParent);
                     });
                 }
@@ -7506,17 +7557,20 @@ export class VisualizationPanel {
 
                             // For requirements, collect subject, stakeholder, constraint, and require constraint
                             if (isRequirement) {
-                                if (cType === 'subject' || child.name === 'subject' || (child.attributes && child.attributes.get && child.attributes.get('isSubject'))) {
+                                if (cType === 'subject' || cType.includes('subject') || child.name === 'subject' || (child.attributes && child.attributes.get && child.attributes.get('isSubject'))) {
                                     var subjectType = child.typing || (child.attributes && child.attributes.get ? child.attributes.get('type') || child.attributes.get('typedBy') : '');
+                                    // Clean up typing value
+                                    if (subjectType) subjectType = subjectType.replace(/^[:~]+/, '').trim();
                                     subjectLines.push({ type: 'subject', text: '👤 ' + child.name + (subjectType ? ' : ' + subjectType : '') });
                                     return;
                                 }
-                                if (cType === 'stakeholder') {
+                                if (cType === 'stakeholder' || cType.includes('stakeholder')) {
                                     var stakeholderType = child.typing || (child.attributes && child.attributes.get ? child.attributes.get('type') || child.attributes.get('typedBy') : '');
+                                    if (stakeholderType) stakeholderType = stakeholderType.replace(/^[:~]+/, '').trim();
                                     stakeholderLines.push({ type: 'stakeholder', text: '🏢 ' + child.name + (stakeholderType ? ' : ' + stakeholderType : ''), stakeholderType: stakeholderType });
                                     return;
                                 }
-                                if (cType.includes('constraint') || cType === 'require constraint' || cType === 'assume constraint') {
+                                if (cType.includes('constraint') || cType === 'require constraint' || cType === 'assume constraint' || cType === 'require') {
                                     var constraintExpr = child.attributes && child.attributes.get ? child.attributes.get('expression') || child.attributes.get('constraint') : '';
                                     var constraintText = child.name || constraintExpr || 'constraint';
                                     constraintLines.push({ type: 'constraint', text: '⚙ ' + constraintText });
@@ -8904,8 +8958,8 @@ export class VisualizationPanel {
                 clonedG.removeAttribute('transform');
             }
 
-            // Resolve CSS variables in style attributes BEFORE adding bgRect
-            // so element indices match between original and clone
+            // Resolve CSS variables and inline CSS class styles for export
+            // This handles both inline styles with var() and elements styled via CSS classes
             const elements = clonedSvg.querySelectorAll('*');
             const originalElements = svgElement.querySelectorAll('*');
 
@@ -8914,13 +8968,84 @@ export class VisualizationPanel {
                 if (!origEl) return;
 
                 try {
+                    const tagName = el.tagName.toLowerCase();
+                    const computedStyle = window.getComputedStyle(origEl);
+
+                    // For path elements (tree links, connectors), inline critical stroke properties
+                    if (tagName === 'path') {
+                        const stroke = computedStyle.getPropertyValue('stroke');
+                        const strokeWidth = computedStyle.getPropertyValue('stroke-width');
+                        const fill = computedStyle.getPropertyValue('fill');
+                        const opacity = computedStyle.getPropertyValue('opacity');
+                        const strokeDasharray = computedStyle.getPropertyValue('stroke-dasharray');
+
+                        let inlineStyle = '';
+                        if (stroke && stroke !== 'none') inlineStyle += 'stroke: ' + stroke + '; ';
+                        if (strokeWidth) inlineStyle += 'stroke-width: ' + strokeWidth + '; ';
+                        if (fill) inlineStyle += 'fill: ' + fill + '; ';
+                        if (opacity && opacity !== '1') inlineStyle += 'opacity: ' + opacity + '; ';
+                        if (strokeDasharray && strokeDasharray !== 'none') inlineStyle += 'stroke-dasharray: ' + strokeDasharray + '; ';
+
+                        if (inlineStyle) {
+                            el.setAttribute('style', inlineStyle);
+                        }
+                    }
+
+                    // For line elements, inline stroke properties
+                    if (tagName === 'line') {
+                        const stroke = computedStyle.getPropertyValue('stroke');
+                        const strokeWidth = computedStyle.getPropertyValue('stroke-width');
+                        const strokeDasharray = computedStyle.getPropertyValue('stroke-dasharray');
+
+                        let inlineStyle = '';
+                        if (stroke && stroke !== 'none') inlineStyle += 'stroke: ' + stroke + '; ';
+                        if (strokeWidth) inlineStyle += 'stroke-width: ' + strokeWidth + '; ';
+                        if (strokeDasharray && strokeDasharray !== 'none') inlineStyle += 'stroke-dasharray: ' + strokeDasharray + '; ';
+
+                        if (inlineStyle) {
+                            el.setAttribute('style', inlineStyle);
+                        }
+                    }
+
+                    // For circle elements, inline fill and stroke
+                    if (tagName === 'circle') {
+                        const stroke = computedStyle.getPropertyValue('stroke');
+                        const strokeWidth = computedStyle.getPropertyValue('stroke-width');
+                        const fill = computedStyle.getPropertyValue('fill');
+
+                        let inlineStyle = '';
+                        if (stroke && stroke !== 'none') inlineStyle += 'stroke: ' + stroke + '; ';
+                        if (strokeWidth) inlineStyle += 'stroke-width: ' + strokeWidth + '; ';
+                        if (fill) inlineStyle += 'fill: ' + fill + '; ';
+
+                        if (inlineStyle) {
+                            el.setAttribute('style', inlineStyle);
+                        }
+                    }
+
+                    // For text elements, inline font and fill
+                    if (tagName === 'text') {
+                        const fill = computedStyle.getPropertyValue('fill') || computedStyle.getPropertyValue('color');
+                        const fontSize = computedStyle.getPropertyValue('font-size');
+                        const fontFamily = computedStyle.getPropertyValue('font-family');
+                        const fontWeight = computedStyle.getPropertyValue('font-weight');
+
+                        let inlineStyle = el.getAttribute('style') || '';
+                        if (fill && !inlineStyle.includes('fill:')) inlineStyle += 'fill: ' + fill + '; ';
+                        if (fontSize && !inlineStyle.includes('font-size:')) inlineStyle += 'font-size: ' + fontSize + '; ';
+                        if (fontFamily && !inlineStyle.includes('font-family:')) inlineStyle += 'font-family: ' + fontFamily + '; ';
+                        if (fontWeight && !inlineStyle.includes('font-weight:')) inlineStyle += 'font-weight: ' + fontWeight + '; ';
+
+                        if (inlineStyle) {
+                            el.setAttribute('style', inlineStyle);
+                        }
+                    }
+
                     // Get the existing style attribute
                     const existingStyle = el.getAttribute('style') || '';
 
-                    // Only process if it contains CSS variables
+                    // Resolve any remaining CSS variables in style attributes
                     if (existingStyle.includes('var(')) {
-                        const computedStyle = window.getComputedStyle(origEl);
-
                         // Extract each style property and resolve if needed
                         const styleProps = existingStyle.split(';').filter(s => s.trim());
                         const resolvedProps = styleProps.map(prop => {
@@ -8941,21 +9066,27 @@ export class VisualizationPanel {
                         el.setAttribute('style', resolvedProps.join('; ') + ';');
                     }
 
-                    // For rect elements that are containers, make fill transparent
-                    // but keep the stroke visible
-                    const tagName = el.tagName.toLowerCase();
+                    // For rect elements that are containers, keep stroke but may adjust fill
                     if (tagName === 'rect') {
-                        const computedStyle = window.getComputedStyle(origEl);
                         const stroke = computedStyle.getPropertyValue('stroke');
+                        const fill = computedStyle.getPropertyValue('fill');
+                        const strokeWidth = computedStyle.getPropertyValue('stroke-width');
+                        const rx = computedStyle.getPropertyValue('rx');
 
-                        // If the rect has a stroke (it's a container box), make fill transparent
-                        if (stroke && stroke !== 'none' && stroke !== 'rgba(0, 0, 0, 0)') {
-                            const currentStyle = el.getAttribute('style') || '';
-                            // Replace fill with none to make it transparent
-                            let newStyle = currentStyle.replace(/fill\s*:[^;]+;?/gi, '');
-                            newStyle = newStyle + '; fill: none;';
-                            el.setAttribute('style', newStyle);
+                        let currentStyle = el.getAttribute('style') || '';
+
+                        // Inline computed styles if not already present
+                        if (stroke && stroke !== 'none' && !currentStyle.includes('stroke:')) {
+                            currentStyle += 'stroke: ' + stroke + '; ';
                         }
+                        if (strokeWidth && !currentStyle.includes('stroke-width:')) {
+                            currentStyle += 'stroke-width: ' + strokeWidth + '; ';
+                        }
+                        if (fill && !currentStyle.includes('fill:')) {
+                            currentStyle += 'fill: ' + fill + '; ';
+                        }
+
+                        el.setAttribute('style', currentStyle);
                     }
                 } catch (e) {
                     // Skip elements that can't be styled
@@ -9001,11 +9132,14 @@ export class VisualizationPanel {
             reader.readAsDataURL(blob);
         }
 
-        function exportPNG() {
+        function exportPNG(scale) {
+            scale = scale || 2; // default to 2x if not provided
+
             if (currentView === 'sysml' && cy) {
                 const pngData = cy.png({
                     output: 'base64uri',
                     full: true,
+                    scale: scale,
                     bg: getComputedStyle(document.body).backgroundColor || '#1e1e1e'
                 });
                 vscode.postMessage({
@@ -9033,9 +9167,6 @@ export class VisualizationPanel {
             // Get dimensions from the prepared SVG
             const width = parseInt(preparedSvg.getAttribute('width')) || 800;
             const height = parseInt(preparedSvg.getAttribute('height')) || 600;
-
-            // Use 2x scale for good quality without massive file sizes
-            const scale = 2;
 
             const canvas = document.createElement('canvas');
             canvas.width = width * scale;
@@ -9133,12 +9264,12 @@ export class VisualizationPanel {
             const ports = data.ports || [];
             const connectors = data.connectors || [];
 
-            // Layout configuration - expanded to show all properties
+            // Layout configuration - expanded spacing for ports and connectors
             const isHorizontal = layoutDirection === 'horizontal';
-            const partWidth = 220;  // Wider to fit property names
-            const padding = 50;
-            const horizontalSpacing = 60;
-            const verticalSpacing = 40;
+            const partWidth = 280;  // Wider to fit port labels on both sides
+            const padding = 140;     // More padding for port labels outside nodes
+            const horizontalSpacing = 160;  // More space between nodes for connectors
+            const verticalSpacing = 100;    // More vertical space for connector routing
 
             // Assign IDs to parts
             parts.forEach((part, index) => {
@@ -9236,7 +9367,10 @@ export class VisualizationPanel {
             }
 
             // Position parts in grid with variable row heights
+            // Stagger alternate columns vertically to make connector routing clearer
             const partPositions = new Map();
+            const staggerOffset = 60;  // Vertical offset for alternate columns
+
             parts.forEach((part, index) => {
                 const col = index % cols;
                 const row = Math.floor(index / cols);
@@ -9245,6 +9379,11 @@ export class VisualizationPanel {
                 let yPos = padding;
                 for (let r = 0; r < row; r++) {
                     yPos += rowHeights[r] + verticalSpacing;
+                }
+
+                // Stagger alternate columns - odd columns get offset down
+                if (col % 2 === 1) {
+                    yPos += staggerOffset;
                 }
 
                 const posData = {
@@ -9293,41 +9432,188 @@ export class VisualizationPanel {
                 return null;
             };
 
-            // Add SysML v2 connector markers
+            // Add SysML v2 connector markers (per spec section 7.17)
             const defs = svg.select('defs').empty() ? svg.append('defs') : svg.select('defs');
 
-            // Filled arrow for item flow (SysML v2 standard)
+            // Filled arrow for item flow direction (SysML v2: filled triangle)
             defs.append('marker')
                 .attr('id', 'ibd-flow-arrow')
                 .attr('viewBox', '0 -5 10 10')
                 .attr('refX', 10)
                 .attr('refY', 0)
-                .attr('markerWidth', 6)
-                .attr('markerHeight', 6)
+                .attr('markerWidth', 8)
+                .attr('markerHeight', 8)
                 .attr('orient', 'auto')
                 .append('path')
                 .attr('d', 'M0,-4L10,0L0,4Z')
                 .style('fill', 'var(--vscode-charts-blue)');
 
-            // Solid circle for connection end (SysML v2 standard)
+            // Hollow arrow for interface/binding (SysML v2: open triangle)
+            defs.append('marker')
+                .attr('id', 'ibd-interface-arrow')
+                .attr('viewBox', '0 -5 10 10')
+                .attr('refX', 10)
+                .attr('refY', 0)
+                .attr('markerWidth', 8)
+                .attr('markerHeight', 8)
+                .attr('orient', 'auto')
+                .append('path')
+                .attr('d', 'M0,-4L10,0L0,4Z')
+                .style('fill', 'none')
+                .style('stroke', 'var(--vscode-charts-blue)')
+                .style('stroke-width', '1.5px');
+
+            // Solid circle for connection end (SysML v2: ball notation)
             defs.append('marker')
                 .attr('id', 'ibd-connection-dot')
                 .attr('viewBox', '0 0 10 10')
                 .attr('refX', 5)
                 .attr('refY', 5)
-                .attr('markerWidth', 4)
-                .attr('markerHeight', 4)
+                .attr('markerWidth', 5)
+                .attr('markerHeight', 5)
                 .append('circle')
                 .attr('cx', 5)
                 .attr('cy', 5)
                 .attr('r', 4)
                 .style('fill', 'var(--vscode-charts-blue)');
 
-            // Draw connectors FIRST (behind parts)
-            const connectorGroup = g.append('g').attr('class', 'ibd-connectors');
-            let connIdx = 0;
+            // Small filled square for port connection point
+            defs.append('marker')
+                .attr('id', 'ibd-port-connector')
+                .attr('viewBox', '0 0 8 8')
+                .attr('refX', 4)
+                .attr('refY', 4)
+                .attr('markerWidth', 4)
+                .attr('markerHeight', 4)
+                .append('rect')
+                .attr('x', 1)
+                .attr('y', 1)
+                .attr('width', 6)
+                .attr('height', 6)
+                .style('fill', 'var(--vscode-charts-purple)');
 
-            connectors.forEach(connector => {
+            // Draw connectors FIRST (behind parts)
+            // Create connector group - paths only, labels will be added later
+            const connectorGroup = g.append('g').attr('class', 'ibd-connectors');
+
+            // Track used label positions to avoid overlaps
+            const usedLabelPositions = [];
+
+            // Collect label data to render after parts (so labels are on top)
+            const pendingLabels = [];
+
+            // Pre-process connectors: group by node pairs for even distribution
+            // Also track per-port connections to avoid overlaps
+            const nodePairConnectors = new Map();
+            const portConnections = new Map();  // Track connections per port
+
+            connectors.forEach((connector, idx) => {
+                const srcPos = findPartPos(connector.sourceId);
+                const tgtPos = findPartPos(connector.targetId);
+                if (!srcPos || !tgtPos) return;
+
+                // Create a canonical key for this node pair (sorted for bidirectional)
+                const srcKey = srcPos.part.name;
+                const tgtKey = tgtPos.part.name;
+                const pairKey = srcKey < tgtKey ? srcKey + '|' + tgtKey : tgtKey + '|' + srcKey;
+
+                if (!nodePairConnectors.has(pairKey)) {
+                    nodePairConnectors.set(pairKey, []);
+                }
+                nodePairConnectors.get(pairKey).push({ connector, idx });
+
+                // Track port-specific connections
+                const srcPortName = connector.sourceId ? connector.sourceId.split('.').pop() : null;
+                const tgtPortName = connector.targetId ? connector.targetId.split('.').pop() : null;
+                const portKey = srcKey + '.' + (srcPortName || 'edge') + '->' + tgtKey + '.' + (tgtPortName || 'edge');
+
+                if (!portConnections.has(portKey)) {
+                    portConnections.set(portKey, []);
+                }
+                portConnections.get(portKey).push({ connector, idx });
+            });
+
+            // Calculate offset for each connector based on its position in the node pair group
+            const connectorOffsets = new Map();
+            nodePairConnectors.forEach((group, pairKey) => {
+                const count = group.length;
+                const step = 25;  // Increased spacing between connectors for clarity
+                group.forEach((item, i) => {
+                    // Distribute evenly from center: offset = (i - (count-1)/2) * step
+                    const offset = (i - (count - 1) / 2) * step;
+                    connectorOffsets.set(item.idx, { offset, groupIndex: i, groupCount: count });
+                });
+            });
+
+            // Pre-populate usedLabelPositions with port label areas to avoid connector labels overlapping ports
+            partPositions.forEach((pos, partName) => {
+                if (partName !== pos.part.name) return;
+                const part = pos.part;
+                const partPorts = ports.filter(p => p && (p.parentId === part.name || p.parentId === part.id));
+                const portStartY = (part.attributes && (part.attributes.get && (part.attributes.get('partType') || part.attributes.get('type')))) ? 70 : 58;
+
+                // Reserve space for left-side port labels
+                partPorts.forEach((p, i) => {
+                    const portY = pos.y + portStartY + i * 28;
+                    // Left side label area
+                    usedLabelPositions.push({ x: pos.x - 50, y: portY, width: 80, height: 20 });
+                    // Right side label area
+                    usedLabelPositions.push({ x: pos.x + partWidth + 50, y: portY, width: 80, height: 20 });
+                });
+            });
+
+            // Helper to find port position on a part
+            const findPortPosition = (partPos, portName, isSource) => {
+                if (!partPos || !portName) return null;
+
+                const part = partPos.part;
+                const partPorts = ports.filter(p => p && (p.parentId === part.name || p.parentId === part.id));
+
+                // Find the specific port
+                const portNameLower = portName.toLowerCase();
+                const port = partPorts.find(p => p && p.name &&
+                    (p.name.toLowerCase() === portNameLower || portName.toLowerCase().includes(p.name.toLowerCase())));
+
+                if (!port) {
+                    // Port not found - return edge of node
+                    return null;
+                }
+
+                // Determine port position based on direction
+                const portDirection = port.direction || 'inout';
+                const isInPort = portDirection === 'in' || (port.name && port.name.toLowerCase().includes('in'));
+                const isOutPort = portDirection === 'out' || (port.name && port.name.toLowerCase().includes('out'));
+
+                // Find port index among same-direction ports
+                const inPorts = partPorts.filter(p => p && p.name && (p.direction === 'in' || (p.name && p.name.toLowerCase().includes('in'))));
+                const outPorts = partPorts.filter(p => p && p.name && (p.direction === 'out' || (p.name && p.name.toLowerCase().includes('out'))));
+                const inoutPorts = partPorts.filter(p => p && p.name && !inPorts.includes(p) && !outPorts.includes(p));
+
+                const portSize = 14;
+                const portSpacing = 28;
+                const contentStartY = part.attributes && (part.attributes.get && (part.attributes.get('partType') || part.attributes.get('type'))) ? 50 : 38;
+                const portStartY = contentStartY + 20;
+
+                let portY, portX;
+
+                if (isInPort) {
+                    const idx = inPorts.findIndex(p => p.name === port.name);
+                    portY = partPos.y + portStartY + idx * portSpacing;
+                    portX = partPos.x; // Left edge
+                } else if (isOutPort) {
+                    const idx = outPorts.findIndex(p => p.name === port.name);
+                    portY = partPos.y + portStartY + idx * portSpacing;
+                    portX = partPos.x + partWidth; // Right edge
+                } else {
+                    const idx = inoutPorts.findIndex(p => p.name === port.name);
+                    portY = partPos.y + portStartY + inPorts.length * portSpacing + idx * portSpacing;
+                    portX = partPos.x; // Left edge
+                }
+
+                return { x: portX, y: portY, direction: portDirection, isLeft: portX === partPos.x };
+            };
+
+            connectors.forEach((connector, connIdx) => {
                 const srcPos = findPartPos(connector.sourceId);
                 const tgtPos = findPartPos(connector.targetId);
 
@@ -9335,94 +9621,312 @@ export class VisualizationPanel {
                     return;
                 }
 
+                // Try to find actual port positions from connector source/target IDs
+                const srcPortName = connector.sourceId ? connector.sourceId.split('.').pop() : null;
+                const tgtPortName = connector.targetId ? connector.targetId.split('.').pop() : null;
+
+                const srcPortPos = findPortPosition(srcPos, srcPortName, true);
+                const tgtPortPos = findPortPosition(tgtPos, tgtPortName, false);
+
                 // Get dynamic heights for each part
                 const srcHeight = srcPos.height || 80;
                 const tgtHeight = tgtPos.height || 80;
 
-                // Calculate edge connection points
-                const srcCx = srcPos.x + partWidth / 2;
-                const srcCy = srcPos.y + srcHeight / 2;
-                const tgtCx = tgtPos.x + partWidth / 2;
-                const tgtCy = tgtPos.y + tgtHeight / 2;
+                // Get pre-calculated offset for this connector (evenly distributed from center)
+                const offsetInfo = connectorOffsets.get(connIdx) || { offset: 0, groupIndex: 0, groupCount: 1 };
+                const baseOffset = offsetInfo.offset;
 
-                // Small offset for multiple connectors
-                const offset = (connIdx % 4) * 10 - 15;
-                connIdx++;
+                // Calculate connection points - use port positions if found, otherwise node edges
+                let srcX, srcY, tgtX, tgtY;
 
-                let x1, y1, x2, y2;
-                const dx = tgtCx - srcCx;
-                const dy = tgtCy - srcCy;
-
-                if (Math.abs(dx) > Math.abs(dy)) {
-                    // Horizontal connection
-                    if (dx > 0) {
-                        x1 = srcPos.x + partWidth; y1 = srcCy + offset;
-                        x2 = tgtPos.x; y2 = tgtCy + offset;
-                    } else {
-                        x1 = srcPos.x; y1 = srcCy + offset;
-                        x2 = tgtPos.x + partWidth; y2 = tgtCy + offset;
-                    }
+                if (srcPortPos) {
+                    srcX = srcPortPos.x;
+                    srcY = srcPortPos.y;
                 } else {
-                    // Vertical connection
-                    if (dy > 0) {
-                        x1 = srcCx + offset; y1 = srcPos.y + srcHeight;
-                        x2 = tgtCx + offset; y2 = tgtPos.y;
-                    } else {
-                        x1 = srcCx + offset; y1 = srcPos.y;
-                        x2 = tgtCx + offset; y2 = tgtPos.y + tgtHeight;
-                    }
+                    // Default to node center edge with offset
+                    srcX = srcPos.x + partWidth / 2;
+                    srcY = srcPos.y + srcHeight / 2 + baseOffset;
                 }
 
-                // Draw orthogonal path
-                const midX = (x1 + x2) / 2;
-                const midY = (y1 + y2) / 2;
+                if (tgtPortPos) {
+                    tgtX = tgtPortPos.x;
+                    tgtY = tgtPortPos.y;
+                } else {
+                    // Default to node center edge with offset
+                    tgtX = tgtPos.x + partWidth / 2;
+                    tgtY = tgtPos.y + tgtHeight / 2 + baseOffset;
+                }
+
+                const dx = tgtX - srcX;
+                const dy = tgtY - srcY;
+
+                // Base standoff distance from node edges - connectors route this far from nodes
+                const standoff = 50;
+
                 let pathD;
-                if (Math.abs(x2 - x1) > Math.abs(y2 - y1)) {
-                    pathD = 'M' + x1 + ',' + y1 + ' L' + midX + ',' + y1 + ' L' + midX + ',' + y2 + ' L' + x2 + ',' + y2;
+                let labelX, labelY;
+
+                // Route based on port positions
+                if (srcPortPos && tgtPortPos) {
+                    // Both ports found - create clean orthogonal path between them
+                    const srcIsLeft = srcPortPos.isLeft;
+                    const tgtIsLeft = tgtPortPos.isLeft;
+
+                    // Apply offset to source/target Y for multiple connectors to same port
+                    // Use larger offset to ensure connectors are visually separated
+                    const offsetSrcY = srcY + baseOffset * 0.5;
+                    const offsetTgtY = tgtY + baseOffset * 0.5;
+
+                    if (srcIsLeft && tgtIsLeft) {
+                        // Both on left sides - route left, stagger the routing X by offset
+                        const routeX = Math.min(srcPos.x, tgtPos.x) - standoff - baseOffset;
+                        pathD = 'M' + srcX + ',' + offsetSrcY +
+                                ' L' + routeX + ',' + offsetSrcY +
+                                ' L' + routeX + ',' + offsetTgtY +
+                                ' L' + tgtX + ',' + offsetTgtY;
+                        // Position label centered on the vertical routing segment
+                        labelX = routeX;
+                        labelY = (offsetSrcY + offsetTgtY) / 2;
+                    } else if (!srcIsLeft && !tgtIsLeft) {
+                        // Both on right sides - route right, stagger the routing X by offset
+                        const routeX = Math.max(srcPos.x + partWidth, tgtPos.x + partWidth) + standoff + baseOffset;
+                        pathD = 'M' + srcX + ',' + offsetSrcY +
+                                ' L' + routeX + ',' + offsetSrcY +
+                                ' L' + routeX + ',' + offsetTgtY +
+                                ' L' + tgtX + ',' + offsetTgtY;
+                        // Position label centered on the vertical routing segment
+                        labelX = routeX;
+                        labelY = (offsetSrcY + offsetTgtY) / 2;
+                    } else {
+                        // Opposite sides - direct horizontal with vertical segment, stagger midX by offset
+                        const midX = (srcX + tgtX) / 2 + baseOffset;
+                        pathD = 'M' + srcX + ',' + offsetSrcY +
+                                ' L' + midX + ',' + offsetSrcY +
+                                ' L' + midX + ',' + offsetTgtY +
+                                ' L' + tgtX + ',' + offsetTgtY;
+                        // Position label centered on the vertical segment
+                        labelX = midX;
+                        labelY = (offsetSrcY + offsetTgtY) / 2;
+                    }
                 } else {
-                    pathD = 'M' + x1 + ',' + y1 + ' L' + x1 + ',' + midY + ' L' + x2 + ',' + midY + ' L' + x2 + ',' + y2;
+                    // Fallback - connect node edges with orthogonal routing
+                    const srcCx = srcPos.x + partWidth / 2;
+                    const srcCy = srcPos.y + srcHeight / 2;
+                    const tgtCx = tgtPos.x + partWidth / 2;
+                    const tgtCy = tgtPos.y + tgtHeight / 2;
+
+                    if (Math.abs(tgtCx - srcCx) > Math.abs(tgtCy - srcCy)) {
+                        // Horizontal connection - stagger the vertical segment by baseOffset
+                        const exitX = tgtCx > srcCx ? srcPos.x + partWidth : srcPos.x;
+                        const enterX = tgtCx > srcCx ? tgtPos.x : tgtPos.x + partWidth;
+                        const midX = (exitX + enterX) / 2 + baseOffset;
+                        const y1 = srcCy + baseOffset * 0.3;
+                        const y2 = tgtCy + baseOffset * 0.3;
+
+                        pathD = 'M' + exitX + ',' + y1 +
+                                ' L' + midX + ',' + y1 +
+                                ' L' + midX + ',' + y2 +
+                                ' L' + enterX + ',' + y2;
+                        // Position label centered on the vertical segment
+                        labelX = midX;
+                        labelY = (y1 + y2) / 2;
+                    } else {
+                        // Vertical connection - stagger the horizontal segment by baseOffset
+                        const exitY = tgtCy > srcCy ? srcPos.y + srcHeight : srcPos.y;
+                        const enterY = tgtCy > srcCy ? tgtPos.y : tgtPos.y + tgtHeight;
+                        const midY = (exitY + enterY) / 2 + baseOffset;
+                        const x1 = srcCx + baseOffset * 0.3;
+                        const x2 = tgtCx + baseOffset * 0.3;
+
+                        pathD = 'M' + x1 + ',' + exitY +
+                                ' L' + x1 + ',' + midY +
+                                ' L' + x2 + ',' + midY +
+                                ' L' + x2 + ',' + enterY;
+                        // Position label centered on the horizontal segment
+                        labelX = (x1 + x2) / 2;
+                        labelY = midY;
+                    }
                 }
 
-                // Determine connector type and style (SysML v2 conventions)
-                const isFlow = connector.type === 'flow' || connector.name.includes('flow');
-                const isBinding = connector.type === 'binding' || connector.type === 'interface';
+                // Determine connector type and style (SysML v2 conventions per spec 7.17)
+                const connTypeLower = (connector.type || '').toLowerCase();
+                const connNameLower = (connector.name || '').toLowerCase();
+                const isFlow = connTypeLower === 'flow' || connNameLower.includes('flow');
+                const isInterface = connTypeLower === 'interface' || connNameLower.includes('interface');
+                const isBinding = connTypeLower === 'binding' || connNameLower.includes('bind');
+                const isConnection = connTypeLower === 'connection' || connTypeLower === 'connect';
 
-                connectorGroup.append('path')
+                // SysML v2 connector styling:
+                // - Flows: solid line with filled arrow showing item flow direction
+                // - Interfaces: solid line with open arrow (conjugate relationship)
+                // - Bindings: dashed line (binding connection)
+                // - Connections: solid line with dots at ends
+                let strokeStyle = 'none';
+                let strokeWidth = '2px';
+                let markerStart = 'none';
+                let markerEnd = 'none';
+                let strokeColor = 'var(--vscode-charts-blue)';
+
+                if (isFlow) {
+                    // Flow: filled arrow at target to show item flow direction
+                    markerEnd = 'url(#ibd-flow-arrow)';
+                    strokeColor = 'var(--vscode-charts-green)';
+                } else if (isInterface) {
+                    // Interface: open arrow, represents conjugate interface
+                    markerEnd = 'url(#ibd-interface-arrow)';
+                    strokeColor = 'var(--vscode-charts-purple)';
+                } else if (isBinding) {
+                    // Binding: dashed line
+                    strokeStyle = '6,4';
+                    strokeWidth = '1.5px';
+                    markerStart = 'url(#ibd-connection-dot)';
+                    markerEnd = 'url(#ibd-connection-dot)';
+                } else {
+                    // Connection: solid line with dots at both ends
+                    markerStart = 'url(#ibd-connection-dot)';
+                    markerEnd = 'url(#ibd-connection-dot)';
+                }
+
+                // Create the connector path with click handler for highlighting
+                const connectorPath = connectorGroup.append('path')
                     .attr('d', pathD)
+                    .attr('class', 'ibd-connector')
+                    .attr('data-connector-id', 'connector-' + connIdx)
+                    .attr('data-source', connector.sourceId || '')
+                    .attr('data-target', connector.targetId || '')
                     .style('fill', 'none')
-                    .style('stroke', 'var(--vscode-charts-blue)')
-                    .style('stroke-width', isBinding ? '1.5px' : '2px')
-                    .style('stroke-dasharray', isBinding ? '5,3' : 'none')  // Dashed for binding
-                    .style('marker-start', isFlow ? 'none' : 'url(#ibd-connection-dot)')
-                    .style('marker-end', isFlow ? 'url(#ibd-flow-arrow)' : 'url(#ibd-connection-dot)');
+                    .style('stroke', strokeColor)
+                    .style('stroke-width', strokeWidth)
+                    .style('stroke-dasharray', strokeStyle)
+                    .style('marker-start', markerStart)
+                    .style('marker-end', markerEnd)
+                    .style('cursor', 'pointer');
 
-                // Connection label at midpoint (SysML v2: clean, minimal background)
+                // Store original styles for unhighlighting
+                const originalStroke = strokeColor;
+                const originalStrokeWidth = strokeWidth;
+
+                // Click handler to highlight connector end-to-end
+                connectorPath.on('click', function(event) {
+                    event.stopPropagation();
+
+                    // Clear any previous connector highlights
+                    d3.selectAll('.ibd-connector').each(function() {
+                        const el = d3.select(this);
+                        const origStroke = el.attr('data-original-stroke');
+                        const origWidth = el.attr('data-original-width');
+                        if (origStroke) {
+                            el.style('stroke', origStroke)
+                              .style('stroke-width', origWidth)
+                              .classed('connector-highlighted', false);
+                            el.attr('data-original-stroke', null)
+                              .attr('data-original-width', null);
+                        }
+                    });
+
+                    // Highlight this connector
+                    const self = d3.select(this);
+                    self.attr('data-original-stroke', originalStroke)
+                        .attr('data-original-width', originalStrokeWidth)
+                        .style('stroke', '#FFD700')
+                        .style('stroke-width', '4px')
+                        .classed('connector-highlighted', true);
+
+                    // Bring to front
+                    this.parentNode.appendChild(this);
+
+                    // Post message for potential navigation/info
+                    vscode.postMessage({
+                        command: 'connectorSelected',
+                        source: connector.sourceId,
+                        target: connector.targetId,
+                        type: connector.type,
+                        name: connector.name
+                    });
+                });
+
+                // Hover effect
+                connectorPath.on('mouseenter', function() {
+                    const self = d3.select(this);
+                    if (!self.classed('connector-highlighted')) {
+                        self.style('stroke-width', '3px');
+                    }
+                });
+
+                connectorPath.on('mouseleave', function() {
+                    const self = d3.select(this);
+                    if (!self.classed('connector-highlighted')) {
+                        self.style('stroke-width', originalStrokeWidth);
+                    }
+                });
+
+                // Connection label positioned away from path to avoid overlap
                 const label = connector.name || '';
                 if (label && label !== 'connection' && label !== 'connector') {
-                    const lx = (x1 + x2) / 2;
-                    const ly = (y1 + y2) / 2;
-                    const displayLabel = label.length > 15 ? label.substring(0, 13) + '..' : label;
+                    const displayLabel = label.length > 20 ? label.substring(0, 18) + '..' : label;
+                    const labelWidth = displayLabel.length * 7 + 20;
+                    const labelHeight = 20;
 
-                    // White background rectangle for readability
-                    connectorGroup.append('rect')
-                        .attr('x', lx - displayLabel.length * 3 - 3)
-                        .attr('y', ly - 8)
-                        .attr('width', displayLabel.length * 6 + 6)
-                        .attr('height', 13)
-                        .attr('rx', 0)  // Sharp corners per SysML v2
-                        .style('fill', 'var(--vscode-editor-background)')
-                        .style('stroke', 'none')
-                        .style('opacity', 0.95);
+                    // Find a non-overlapping position for the label
+                    let finalLabelX = labelX;
+                    let finalLabelY = labelY;
 
-                    // Connector name label
-                    connectorGroup.append('text')
-                        .attr('x', lx)
-                        .attr('y', ly + 3)
-                        .attr('text-anchor', 'middle')
-                        .text(displayLabel)
-                        .style('font-size', '8px')
-                        .style('font-weight', '500')
-                        .style('fill', 'var(--vscode-charts-blue)');
+                    // Check for overlap with existing labels and adjust
+                    let attempts = 0;
+                    const maxAttempts = 8;
+                    while (attempts < maxAttempts) {
+                        let hasOverlap = false;
+                        for (const used of usedLabelPositions) {
+                            const overlapX = Math.abs(finalLabelX - used.x) < (labelWidth / 2 + used.width / 2 + 10);
+                            const overlapY = Math.abs(finalLabelY - used.y) < (labelHeight / 2 + used.height / 2 + 5);
+                            if (overlapX && overlapY) {
+                                hasOverlap = true;
+                                break;
+                            }
+                        }
+                        if (!hasOverlap) break;
+
+                        // Offset the label to avoid overlap
+                        const offsetDir = attempts % 4;
+                        const offsetAmount = 25 * (Math.floor(attempts / 4) + 1);
+                        if (offsetDir === 0) finalLabelY -= offsetAmount;
+                        else if (offsetDir === 1) finalLabelY += offsetAmount;
+                        else if (offsetDir === 2) finalLabelX -= offsetAmount;
+                        else finalLabelX += offsetAmount;
+                        attempts++;
+                    }
+
+                    // Record this label position
+                    usedLabelPositions.push({ x: finalLabelX, y: finalLabelY, width: labelWidth, height: labelHeight, strokeColor: strokeColor });
+
+                    // Connector type indicator (SysML v2 stereotype)
+                    let typeIndicator = '';
+                    if (isFlow) typeIndicator = '⟶ ';
+                    else if (isInterface) typeIndicator = '◇ ';
+                    else if (isBinding) typeIndicator = '≡ ';
+
+                    // Collect label data for deferred rendering (after parts)
+                    pendingLabels.push({
+                        x: finalLabelX,
+                        y: finalLabelY,
+                        width: labelWidth,
+                        height: labelHeight,
+                        text: typeIndicator + displayLabel,
+                        strokeColor: strokeColor
+                    });
+                }
+
+                // Add flow item type annotation for flows (SysML v2: «item» stereotype)
+                if (isFlow && connector.itemType) {
+                    pendingLabels.push({
+                        x: labelX,
+                        y: labelY - 28,
+                        width: connector.itemType.length * 7 + 10,
+                        height: 16,
+                        text: '«' + connector.itemType + '»',
+                        strokeColor: 'var(--vscode-charts-green)',
+                        isItemType: true
+                    });
                 }
             });
 
@@ -9673,43 +10177,120 @@ export class VisualizationPanel {
                         .style('fill', 'var(--vscode-descriptionForeground)');
                 });
 
-                // Render ports as small squares on the boundary (SysML v2 standard)
-                const portSize = 10;  // Match General View port size
-                const portSpacing = 16;
-                // Position ports after all content lines
-                const portStartY = contentStartY + 8 + contentLines.length * lineHeight + 10;
+                // Render ports as small squares on the boundary (SysML v2 standard per spec 7.17)
+                const portSize = 14;  // Larger for better visibility
+                const portSpacing = 28; // More space between ports for labels
+                // Position ports starting from header area
+                const portStartY = contentStartY + 20;
 
-                // Show ALL ports (no slicing)
-                partPorts.forEach((p, i) => {
-                    if (!p || !p.name) return;
+                // Separate ports by direction: in ports on left, out ports on right
+                const inPorts = partPorts.filter(p => p && p.name && (p.direction === 'in' || (p.name && p.name.toLowerCase().includes('in'))));
+                const outPorts = partPorts.filter(p => p && p.name && (p.direction === 'out' || (p.name && p.name.toLowerCase().includes('out'))));
+                const inoutPorts = partPorts.filter(p => p && p.name && !inPorts.includes(p) && !outPorts.includes(p));
 
-                    // Position ports on left edge, evenly spaced
+                // Render IN ports on left edge with direction arrow
+                inPorts.forEach((p, i) => {
                     const portY = portStartY + i * portSpacing;
+                    const portColor = '#C586C0'; // Purple for in ports
 
-                    // Determine port direction for color
-                    const portDirection = p.direction || 'inout';
-                    const portColor = portDirection === 'in' ? '#C586C0' :
-                                    (portDirection === 'out' ? '#4EC9B0' : '#9CDCFE');
-
-                    // Port symbol (small square on boundary)
+                    // Port symbol (small square on left boundary)
                     partG.append('rect')
                         .attr('class', 'port-icon')
-                        .attr('x', -portSize/2)  // Half outside, half inside
+                        .attr('x', -portSize/2)
                         .attr('y', portY - portSize/2)
                         .attr('width', portSize)
                         .attr('height', portSize)
                         .style('fill', portColor)
                         .style('stroke', 'var(--vscode-editor-background)')
-                        .style('stroke-width', '1px');
+                        .style('stroke-width', '2px');
 
-                    // Port name label (outside the box)
-                    const portLabel = p.name.length > 10 ? p.name.substring(0, 8) + '..' : p.name;
+                    // Direction arrow inside port (pointing in)
+                    partG.append('path')
+                        .attr('d', 'M' + (-portSize/2 + 2) + ',' + portY + ' L' + (portSize/2 - 2) + ',' + portY + ' M' + (portSize/2 - 4) + ',' + (portY - 2) + ' L' + (portSize/2 - 2) + ',' + portY + ' L' + (portSize/2 - 4) + ',' + (portY + 2))
+                        .style('stroke', 'var(--vscode-editor-background)')
+                        .style('stroke-width', '1.5px')
+                        .style('fill', 'none');
+
+                    // Port name label (outside the box on left)
+                    const portLabel = p.name.length > 14 ? p.name.substring(0, 12) + '..' : p.name;
                     partG.append('text')
-                        .attr('x', -portSize/2 - 3)
-                        .attr('y', portY + 3)
+                        .attr('x', -portSize/2 - 10)
+                        .attr('y', portY + 4)
                         .attr('text-anchor', 'end')
                         .text(portLabel)
-                        .style('font-size', '8px')
+                        .style('font-size', '10px')
+                        .style('font-weight', '500')
+                        .style('fill', portColor);
+                });
+
+                // Render OUT ports on right edge with direction arrow
+                outPorts.forEach((p, i) => {
+                    const portY = portStartY + i * portSpacing;
+                    const portColor = '#4EC9B0'; // Green for out ports
+
+                    // Port symbol (small square on right boundary)
+                    partG.append('rect')
+                        .attr('class', 'port-icon')
+                        .attr('x', partWidth - portSize/2)
+                        .attr('y', portY - portSize/2)
+                        .attr('width', portSize)
+                        .attr('height', portSize)
+                        .style('fill', portColor)
+                        .style('stroke', 'var(--vscode-editor-background)')
+                        .style('stroke-width', '2px');
+
+                    // Direction arrow inside port (pointing out)
+                    partG.append('path')
+                        .attr('d', 'M' + (partWidth - portSize/2 + 2) + ',' + portY + ' L' + (partWidth + portSize/2 - 2) + ',' + portY + ' M' + (partWidth + portSize/2 - 4) + ',' + (portY - 2) + ' L' + (partWidth + portSize/2 - 2) + ',' + portY + ' L' + (partWidth + portSize/2 - 4) + ',' + (portY + 2))
+                        .style('stroke', 'var(--vscode-editor-background)')
+                        .style('stroke-width', '1.5px')
+                        .style('fill', 'none');
+
+                    // Port name label (outside the box on right)
+                    const portLabel = p.name.length > 14 ? p.name.substring(0, 12) + '..' : p.name;
+                    partG.append('text')
+                        .attr('x', partWidth + portSize/2 + 10)
+                        .attr('y', portY + 4)
+                        .attr('text-anchor', 'start')
+                        .text(portLabel)
+                        .style('font-size', '10px')
+                        .style('font-weight', '500')
+                        .style('fill', portColor);
+                });
+
+                // Render INOUT ports on left edge (below in ports) with bidirectional indicator
+                const inoutStartY = portStartY + inPorts.length * portSpacing;
+                inoutPorts.forEach((p, i) => {
+                    const portY = inoutStartY + i * portSpacing;
+                    const portColor = '#9CDCFE'; // Blue for inout ports
+
+                    // Port symbol (small square on left boundary)
+                    partG.append('rect')
+                        .attr('class', 'port-icon')
+                        .attr('x', -portSize/2)
+                        .attr('y', portY - portSize/2)
+                        .attr('width', portSize)
+                        .attr('height', portSize)
+                        .style('fill', portColor)
+                        .style('stroke', 'var(--vscode-editor-background)')
+                        .style('stroke-width', '2px');
+
+                    // Bidirectional arrow inside port
+                    partG.append('path')
+                        .attr('d', 'M' + (-portSize/2 + 3) + ',' + portY + ' L' + (portSize/2 - 3) + ',' + portY)
+                        .style('stroke', 'var(--vscode-editor-background)')
+                        .style('stroke-width', '1.5px')
+                        .style('fill', 'none');
+
+                    // Port name label (outside the box on left)
+                    const portLabel = p.name.length > 14 ? p.name.substring(0, 12) + '..' : p.name;
+                    partG.append('text')
+                        .attr('x', -portSize/2 - 10)
+                        .attr('y', portY + 4)
+                        .attr('text-anchor', 'end')
+                        .text(portLabel)
+                        .style('font-size', '10px')
+                        .style('font-weight', '500')
                         .style('fill', portColor);
                 });
 
@@ -9730,6 +10311,42 @@ export class VisualizationPanel {
                     event.stopPropagation();
                     startInlineEdit(d3.select(this), part.name, pos.x, pos.y, partWidth);
                 });
+            });
+
+            // Render connector labels LAST (on top of everything)
+            const labelGroup = g.append('g').attr('class', 'ibd-connector-labels');
+            pendingLabels.forEach(labelData => {
+                if (labelData.isItemType) {
+                    // Item type label (no background)
+                    labelGroup.append('text')
+                        .attr('x', labelData.x)
+                        .attr('y', labelData.y)
+                        .attr('text-anchor', 'middle')
+                        .text(labelData.text)
+                        .style('font-size', '9px')
+                        .style('font-style', 'italic')
+                        .style('fill', labelData.strokeColor);
+                } else {
+                    // Standard connector label with background
+                    labelGroup.append('rect')
+                        .attr('x', labelData.x - labelData.width / 2)
+                        .attr('y', labelData.y - labelData.height / 2)
+                        .attr('width', labelData.width)
+                        .attr('height', labelData.height)
+                        .attr('rx', 4)
+                        .style('fill', 'var(--vscode-editor-background)')
+                        .style('stroke', labelData.strokeColor)
+                        .style('stroke-width', '1px');
+
+                    labelGroup.append('text')
+                        .attr('x', labelData.x)
+                        .attr('y', labelData.y + 4)
+                        .attr('text-anchor', 'middle')
+                        .text(labelData.text)
+                        .style('font-size', '10px')
+                        .style('font-weight', '600')
+                        .style('fill', labelData.strokeColor);
+                }
             });
         }
 
@@ -12267,11 +12884,19 @@ export class VisualizationPanel {
         document.querySelectorAll('.export-menu-item').forEach(item => {
             item.addEventListener('click', (e) => {
                 const format = e.target.getAttribute('data-format');
+                const scale = parseInt(e.target.getAttribute('data-scale')) || 2;
+
+                // Don't close menu or export for parent PNG item (has submenu)
+                if (format === 'png-parent') {
+                    e.stopPropagation();
+                    return;
+                }
+
                 exportMenu.classList.remove('show');
 
                 switch(format) {
                     case 'png':
-                        exportPNG();
+                        exportPNG(scale);
                         break;
                     case 'svg':
                         exportSVG();

@@ -173,10 +173,10 @@ returnStatement
     | RETURN COLONGTGT identifier valueBinding? ';'
     ;
 
-// Require statement: require qualifiedName; or require constraint { ... }
+// Require statement: require qualifiedName; or require constraint name { ... } or require constraint name;
 requireStatement
     : REQUIRE qualifiedName ';'
-    | REQUIRE CONSTRAINT body
+    | REQUIRE CONSTRAINT identifier? typing? (body | ';')
     ;
 
 // Fork and Join usages for control flow

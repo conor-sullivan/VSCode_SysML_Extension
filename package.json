@@ -242,10 +242,16 @@
           "default": "sysml",
           "description": "Default view to load when opening the SysML Model Visualizer"
         },
-        "sysml.experimentalBehavioralViews": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Enable the experimental Activity, Sequence, State, and Use Case diagram views in the SysML visualizer. These views are in-flight and may change without notice."
+        "sysml.export.defaultScale": {
+          "type": "number",
+          "enum": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "default": 2,
+          "markdownDescription": "Default scale factor for PNG exports. Higher values produce larger, higher-quality images.\n- 1x: Original size\n- 2x: Double size (default, good quality)\n- 3x: Triple size (high quality)\n- 4x: Quadruple size (very high quality, large files)"
         }
       }
     }

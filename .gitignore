@@ -58,3 +58,5 @@ Thumbs.db
 
 # Official SysML v2 Library (downloaded at build time)
 sysml.library/
+
+docs

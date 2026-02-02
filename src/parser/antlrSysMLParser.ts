@@ -887,9 +887,13 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
             try {
                 const typingCtx = ctx.typing();
                 if (typingCtx) {
-                    const typeName = this.extractQualifiedName(typingCtx);
+                    let typeName = this.extractQualifiedName(typingCtx);
+                    // Clean up typing value - remove leading colon and optional tilde for conjugate types
                     if (typeName) {
-                        (element as any).typing = typeName;
+                        typeName = typeName.replace(/^[:~]+/, '').trim();
+                        if (typeName) {
+                            (element as any).typing = typeName;
+                        }
                     }
                 }
             } catch {
@@ -1990,6 +1994,26 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
+    }
+
+    visitRequireStatement(ctx: any): void {
+        // Handle: require qualifiedName; or require constraint name;
+        const fullText = ctx.getText?.() || '';
+        const isConstraint = fullText.toLowerCase().includes('constraint');
+
+        if (isConstraint) {
+            // Create a require constraint element
+            const element = this.createElement('require constraint', ctx);
+            this.parentStack.push(element);
+            this.visitChildren(ctx);
+            this.parentStack.pop();
+        } else {
+            // Create a require reference element
+            const element = this.createElement('require', ctx);
+            this.parentStack.push(element);
+            this.visitChildren(ctx);
+            this.parentStack.pop();
+        }
     }
 
     visitObjectiveUsage(ctx: any): void {
