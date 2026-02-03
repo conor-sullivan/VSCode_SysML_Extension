@@ -8034,6 +8034,29 @@ export class VisualizationPanel {
                         startInlineEdit(nodeG, name, pos.x, pos.y, pos.width);
                     });
 
+                    // Add drag behavior for interactive node positioning
+                    nodeG.style('cursor', 'grab');
+                    var generalDrag = d3.drag()
+                        .on('start', function(event) {
+                            d3.select(this).raise().style('cursor', 'grabbing');
+                            event.sourceEvent.stopPropagation();
+                        })
+                        .on('drag', function(event) {
+                            // Update stored position
+                            pos.x += event.dx;
+                            pos.y += event.dy;
+
+                            // Update node transform
+                            d3.select(this).attr('transform', 'translate(' + pos.x + ',' + pos.y + ')');
+
+                            // Redraw edges with new positions
+                            drawGeneralEdges();
+                        })
+                        .on('end', function(event) {
+                            d3.select(this).style('cursor', 'grab');
+                        });
+                    nodeG.call(generalDrag);
+
                     // Draw ports on node boundary (SysML v2 notation)
                     var portSize = 10;
                     var portSpacing = 16;
@@ -8147,11 +8170,404 @@ export class VisualizationPanel {
                     });
                 });
 
-                // Draw edges
-                var edgeGroup = g.insert('g', ':first-child').attr('class', 'general-edges');
-                var connections = [];
+                // Function to draw/redraw edges based on current node positions
+                function drawGeneralEdges() {
+                    // Clear existing edges
+                    g.selectAll('.general-edges').remove();
 
-                // Add specialization arrow marker (hollow triangle for :>)
+                    // Create edge group (insert behind nodes)
+                    var edgeGroup = g.insert('g', '.general-nodes').attr('class', 'general-edges');
+
+                    // Update port positions based on current node positions
+                    portPositions.clear();
+                    nodePositions.forEach(function(pos, name) {
+                        var el = pos.element;
+                        if (!el) return;
+
+                        var portSize = 10;
+                        var portSpacing = 16;
+                        var nodePorts = [];
+
+                        // Collect ports for this node
+                        if (el.children) {
+                            el.children.forEach(function(child) {
+                                if (!child || !child.name) return;
+                                var cType = (child.type || '').toLowerCase();
+                                if (cType === 'port' || cType.includes('port')) {
+                                    nodePorts.push({
+                                        name: child.name,
+                                        type: child.type,
+                                        direction: child.attributes && child.attributes.get ?
+                                            (child.attributes.get('direction') || 'inout') : 'inout'
+                                    });
+                                }
+                            });
+                        }
+                        if (el.ports) {
+                            el.ports.forEach(function(p) {
+                                var pName = typeof p === 'string' ? p : (p.name || 'port');
+                                if (!nodePorts.some(function(np) { return np.name === pName; })) {
+                                    nodePorts.push({
+                                        name: pName,
+                                        type: 'port',
+                                        direction: (typeof p === 'object' && p.direction) ? p.direction : 'inout'
+                                    });
+                                }
+                            });
+                        }
+
+                        var leftPorts = [];
+                        var rightPorts = [];
+                        nodePorts.forEach(function(p, i) {
+                            if (i % 2 === 0) leftPorts.push(p);
+                            else rightPorts.push(p);
+                        });
+
+                        var portStartY = 55;
+
+                        leftPorts.forEach(function(port, i) {
+                            var py = portStartY + i * portSpacing;
+                            if (py <= pos.height - 20) {
+                                portPositions.set(port.name, {
+                                    ownerName: name,
+                                    x: pos.x,
+                                    y: pos.y + py,
+                                    side: 'left'
+                                });
+                            }
+                        });
+
+                        rightPorts.forEach(function(port, i) {
+                            var py = portStartY + i * portSpacing;
+                            if (py <= pos.height - 20) {
+                                portPositions.set(port.name, {
+                                    ownerName: name,
+                                    x: pos.x + pos.width,
+                                    y: pos.y + py,
+                                    side: 'right'
+                                });
+                            }
+                        });
+                    });
+
+                    // Collect relationships
+                    var connections = [];
+                    function collectRelationships(elements) {
+                        if (!elements) return;
+                        elements.forEach(function(el) {
+                            if (el.relationships) {
+                                el.relationships.forEach(function(rel) {
+                                    var tgt = rel.target || rel.relatedElement;
+                                    if (elementMap.has(el.name) && elementMap.has(tgt)) {
+                                        connections.push({
+                                            source: el.name,
+                                            target: tgt,
+                                            type: rel.type || 'relates'
+                                        });
+                                    }
+                                });
+                            }
+                            if (el.children) collectRelationships(el.children);
+                        });
+                    }
+                    collectRelationships(elementsData);
+
+                    // Add part-to-def links
+                    partToDefLinks.forEach(function(link) {
+                        if (elementMap.has(link.source) && elementMap.has(link.target)) {
+                            connections.push({
+                                source: link.source,
+                                target: link.target,
+                                type: link.type,
+                                isSpecialization: link.type === 'specializes',
+                                isTypedBy: link.type === 'typed by',
+                                isContains: link.type === 'contains'
+                            });
+                        }
+                    });
+
+                    // Draw connections with orthogonal routing
+                    var drawnEdges = new Set();
+                    var edgeOffsets = {};
+
+                    connections.forEach(function(conn) {
+                        var srcPos = nodePositions.get(conn.source);
+                        var tgtPos = nodePositions.get(conn.target);
+                        if (!srcPos || !tgtPos || conn.source === conn.target) return;
+
+                        var edgeKey = conn.source + '->' + conn.target;
+                        if (drawnEdges.has(edgeKey)) return;
+                        drawnEdges.add(edgeKey);
+
+                        var pairKey = [conn.source, conn.target].sort().join('--');
+                        edgeOffsets[pairKey] = (edgeOffsets[pairKey] || 0) + 1;
+                        var offset = (edgeOffsets[pairKey] - 1) * 15;
+
+                        var srcCx = srcPos.x + srcPos.width / 2;
+                        var srcCy = srcPos.y + srcPos.height / 2;
+                        var tgtCx = tgtPos.x + tgtPos.width / 2;
+                        var tgtCy = tgtPos.y + tgtPos.height / 2;
+                        var dx = tgtCx - srcCx;
+                        var dy = tgtCy - srcCy;
+
+                        var x1, y1, x2, y2;
+                        if (Math.abs(dx) > Math.abs(dy)) {
+                            x1 = dx > 0 ? srcPos.x + srcPos.width : srcPos.x;
+                            y1 = srcCy + offset;
+                            x2 = dx > 0 ? tgtPos.x : tgtPos.x + tgtPos.width;
+                            y2 = tgtCy + offset;
+                        } else {
+                            x1 = srcCx + offset;
+                            y1 = dy > 0 ? srcPos.y + srcPos.height : srcPos.y;
+                            x2 = tgtCx + offset;
+                            y2 = dy > 0 ? tgtPos.y : tgtPos.y + tgtPos.height;
+                        }
+
+                        var midX = (x1 + x2) / 2;
+                        var midY = (y1 + y2) / 2;
+                        var pathD;
+                        if (Math.abs(dx) > Math.abs(dy)) {
+                            pathD = 'M' + x1 + ',' + y1 + ' L' + midX + ',' + y1 + ' L' + midX + ',' + y2 + ' L' + x2 + ',' + y2;
+                        } else {
+                            pathD = 'M' + x1 + ',' + y1 + ' L' + x1 + ',' + midY + ' L' + x2 + ',' + midY + ' L' + x2 + ',' + y2;
+                        }
+
+                        var strokeColor, strokeDash, markerEnd, strokeWidth;
+
+                        if (conn.isSpecialization) {
+                            strokeColor = '#C586C0';
+                            strokeDash = 'none';
+                            markerEnd = 'url(#general-specializes)';
+                            strokeWidth = '1.5px';
+                        } else if (conn.isTypedBy || conn.type === 'typed by') {
+                            strokeColor = '#569CD6';
+                            strokeDash = '5,3';
+                            markerEnd = 'url(#general-typed-by)';
+                            strokeWidth = '1.5px';
+                        } else if (conn.isContains || conn.type === 'contains') {
+                            strokeColor = '#4EC9B0';
+                            strokeDash = 'none';
+                            markerEnd = 'url(#general-contains)';
+                            strokeWidth = '1.5px';
+                        } else if (conn.type === 'connect' || conn.type === 'interface') {
+                            strokeColor = '#D7BA7D';
+                            strokeDash = 'none';
+                            markerEnd = 'url(#general-connect)';
+                            strokeWidth = '2px';
+                        } else if (conn.type === 'bind') {
+                            strokeColor = '#808080';
+                            strokeDash = '2,2';
+                            markerEnd = 'none';
+                            strokeWidth = '1px';
+                        } else if (conn.type === 'allocate') {
+                            strokeColor = '#D4D4D4';
+                            strokeDash = '8,4';
+                            markerEnd = 'url(#general-arrow)';
+                            strokeWidth = '1.5px';
+                        } else if (conn.type === 'flow') {
+                            strokeColor = '#4EC9B0';
+                            strokeDash = 'none';
+                            markerEnd = 'url(#general-arrow)';
+                            strokeWidth = '2px';
+                        } else {
+                            strokeColor = 'var(--vscode-charts-blue)';
+                            strokeDash = 'none';
+                            markerEnd = 'url(#general-arrow)';
+                            strokeWidth = '1.5px';
+                        }
+
+                        var origStroke = strokeColor;
+                        var origWidth = strokeWidth;
+
+                        var edgePath = edgeGroup.append('path')
+                            .attr('d', pathD)
+                            .attr('class', 'relationship-edge general-connector')
+                            .attr('data-connector-id', 'rel-' + conn.source + '-' + conn.target)
+                            .attr('data-source', conn.source)
+                            .attr('data-target', conn.target)
+                            .attr('data-type', conn.type || 'relates')
+                            .style('fill', 'none')
+                            .style('stroke', strokeColor)
+                            .style('stroke-width', strokeWidth)
+                            .style('stroke-dasharray', strokeDash)
+                            .style('opacity', 0.85)
+                            .style('marker-end', markerEnd)
+                            .style('cursor', 'pointer');
+
+                        edgePath.on('click', function(event) {
+                            event.stopPropagation();
+                            d3.selectAll('.general-connector').each(function() {
+                                var el = d3.select(this);
+                                var os = el.attr('data-original-stroke');
+                                var ow = el.attr('data-original-width');
+                                if (os) {
+                                    el.style('stroke', os).style('stroke-width', ow).classed('connector-highlighted', false);
+                                    el.attr('data-original-stroke', null).attr('data-original-width', null);
+                                }
+                            });
+                            var self = d3.select(this);
+                            self.attr('data-original-stroke', origStroke).attr('data-original-width', origWidth)
+                                .style('stroke', '#FFD700').style('stroke-width', '4px').classed('connector-highlighted', true);
+                            this.parentNode.appendChild(this);
+                            vscode.postMessage({ command: 'connectorSelected', source: conn.source, target: conn.target, type: conn.type });
+                        });
+
+                        edgePath.on('mouseenter', function() {
+                            var self = d3.select(this);
+                            if (!self.classed('connector-highlighted')) { self.style('stroke-width', '3px'); }
+                        });
+
+                        edgePath.on('mouseleave', function() {
+                            var self = d3.select(this);
+                            if (!self.classed('connector-highlighted')) { self.style('stroke-width', origWidth); }
+                        });
+
+                        if (conn.type) {
+                            var labelX = Math.abs(dx) > Math.abs(dy) ? midX : (x1 + x2) / 2;
+                            var labelY = Math.abs(dx) > Math.abs(dy) ? (y1 + y2) / 2 - 6 : midY - 6;
+
+                            var labelText = conn.type;
+                            if (conn.isSpecialization || conn.type === 'specializes') labelText = ':>';
+                            else if (conn.isTypedBy || conn.type === 'typed by') labelText = ':';
+                            else if (conn.isContains || conn.type === 'contains') labelText = '◆';
+                            else if (conn.type === 'connect') labelText = 'connect';
+                            else if (conn.type === 'bind') labelText = '=';
+                            else if (conn.type.length > 12) labelText = conn.type.substring(0, 10) + '..';
+
+                            edgeGroup.append('rect')
+                                .attr('x', labelX - 20).attr('y', labelY - 8)
+                                .attr('width', 40).attr('height', 12).attr('rx', 2)
+                                .style('fill', 'var(--vscode-editor-background)').style('opacity', 0.9);
+
+                            edgeGroup.append('text')
+                                .attr('x', labelX).attr('y', labelY).attr('text-anchor', 'middle')
+                                .text(labelText)
+                                .style('font-size', '9px').style('font-weight', 'bold').style('fill', strokeColor);
+                        }
+                    });
+
+                    // Draw port-to-port connections
+                    var portConnections = [];
+                    function collectPortConnections(elements) {
+                        if (!elements) return;
+                        elements.forEach(function(el) {
+                            var elType = (el.type || '').toLowerCase();
+                            if (elType.includes('connection') || elType.includes('interface') || elType.includes('connect') || elType === 'bind') {
+                                var fromAttr = el.attributes && el.attributes.get ? el.attributes.get('from') : (el.attributes && el.attributes.from);
+                                var toAttr = el.attributes && el.attributes.get ? el.attributes.get('to') : (el.attributes && el.attributes.to);
+                                if (fromAttr && toAttr) {
+                                    var fromPort = fromAttr.split('.').pop();
+                                    var toPort = toAttr.split('.').pop();
+                                    portConnections.push({
+                                        name: el.name, fromPort: fromPort, toPort: toPort,
+                                        fromFull: fromAttr, toFull: toAttr,
+                                        type: elType === 'bind' ? 'bind' : 'connect'
+                                    });
+                                }
+                            }
+                            if (el.children && el.children.length > 0 && (elType.includes('connection') || elType.includes('interface'))) {
+                                var ends = [];
+                                el.children.forEach(function(child) {
+                                    var childType = (child.type || '').toLowerCase();
+                                    if (childType === 'end' || child.name === 'end') {
+                                        var ref = child.attributes && child.attributes.get ? child.attributes.get('reference') || child.attributes.get('typedBy') : '';
+                                        if (!ref && child.attributes) ref = child.attributes.reference || child.attributes.typedBy || '';
+                                        if (ref) ends.push(ref);
+                                    }
+                                });
+                                if (ends.length >= 2) {
+                                    portConnections.push({
+                                        name: el.name, fromPort: ends[0].split('.').pop(), toPort: ends[1].split('.').pop(),
+                                        fromFull: ends[0], toFull: ends[1], type: 'connect'
+                                    });
+                                }
+                            }
+                            if (el.children) collectPortConnections(el.children);
+                        });
+                    }
+                    collectPortConnections(elementsData);
+
+                    portConnections.forEach(function(pConn) {
+                        var fromPos = portPositions.get(pConn.fromPort);
+                        var toPos = portPositions.get(pConn.toPort);
+                        if (!fromPos || !toPos) return;
+
+                        var x1 = fromPos.x, y1 = fromPos.y, x2 = toPos.x, y2 = toPos.y;
+                        if (fromPos.side === 'left') x1 -= 5;
+                        else if (fromPos.side === 'right') x1 += 5;
+                        if (toPos.side === 'left') x2 -= 5;
+                        else if (toPos.side === 'right') x2 += 5;
+
+                        var midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
+                        var dx = x2 - x1, dy = y2 - y1;
+
+                        var pathD;
+                        if (Math.abs(dx) > Math.abs(dy)) {
+                            pathD = 'M' + x1 + ',' + y1 + ' L' + midX + ',' + y1 + ' L' + midX + ',' + y2 + ' L' + x2 + ',' + y2;
+                        } else {
+                            pathD = 'M' + x1 + ',' + y1 + ' L' + x1 + ',' + midY + ' L' + x2 + ',' + midY + ' L' + x2 + ',' + y2;
+                        }
+
+                        var isBind = pConn.type === 'bind';
+                        var strokeColor = isBind ? '#569CD6' : '#D7BA7D';
+                        var strokeDash = isBind ? '4,2' : 'none';
+                        var portOrigStroke = strokeColor;
+                        var portOrigWidth = '2px';
+
+                        var portEdge = edgeGroup.append('path')
+                            .attr('d', pathD)
+                            .attr('class', 'port-connection-edge general-connector')
+                            .attr('data-connector-id', 'port-' + pConn.fromPort + '-' + pConn.toPort)
+                            .attr('data-source', pConn.fromFull || pConn.fromPort)
+                            .attr('data-target', pConn.toFull || pConn.toPort)
+                            .attr('data-type', pConn.type || 'connect')
+                            .style('fill', 'none').style('stroke', strokeColor)
+                            .style('stroke-width', '2px').style('stroke-dasharray', strokeDash)
+                            .style('opacity', 0.9)
+                            .style('marker-end', 'url(#general-connect)')
+                            .style('marker-start', 'url(#general-connect)')
+                            .style('cursor', 'pointer');
+
+                        portEdge.on('click', function(event) {
+                            event.stopPropagation();
+                            d3.selectAll('.general-connector').each(function() {
+                                var el = d3.select(this);
+                                var os = el.attr('data-original-stroke');
+                                var ow = el.attr('data-original-width');
+                                if (os) {
+                                    el.style('stroke', os).style('stroke-width', ow).classed('connector-highlighted', false);
+                                    el.attr('data-original-stroke', null).attr('data-original-width', null);
+                                }
+                            });
+                            var self = d3.select(this);
+                            self.attr('data-original-stroke', portOrigStroke).attr('data-original-width', portOrigWidth)
+                                .style('stroke', '#FFD700').style('stroke-width', '4px').classed('connector-highlighted', true);
+                            this.parentNode.appendChild(this);
+                            vscode.postMessage({ command: 'connectorSelected', source: pConn.fromFull || pConn.fromPort, target: pConn.toFull || pConn.toPort, type: pConn.type, name: pConn.name });
+                        });
+
+                        portEdge.on('mouseenter', function() {
+                            var self = d3.select(this);
+                            if (!self.classed('connector-highlighted')) { self.style('stroke-width', '3px'); }
+                        });
+
+                        portEdge.on('mouseleave', function() {
+                            var self = d3.select(this);
+                            if (!self.classed('connector-highlighted')) { self.style('stroke-width', portOrigWidth); }
+                        });
+
+                        if (pConn.name) {
+                            edgeGroup.append('text')
+                                .attr('x', midX).attr('y', midY - 6).attr('text-anchor', 'middle')
+                                .text(pConn.name.length > 15 ? pConn.name.substring(0, 13) + '..' : pConn.name)
+                                .style('font-size', '8px').style('fill', strokeColor).style('font-style', 'italic');
+                        }
+                    });
+                }
+
+                // Create edge markers in defs (only needs to be done once)
+                var defs = svg.select('defs').empty() ? svg.append('defs') : svg.select('defs');
+
                 defs.selectAll('#general-specializes').remove();
                 defs.append('marker')
                     .attr('id', 'general-specializes')
@@ -8167,7 +8583,6 @@ export class VisualizationPanel {
                     .style('stroke', '#C586C0')
                     .style('stroke-width', '1.5px');
 
-                // Add typed-by arrow marker (solid filled for :)
                 defs.selectAll('#general-typed-by').remove();
                 defs.append('marker')
                     .attr('id', 'general-typed-by')
@@ -8181,7 +8596,6 @@ export class VisualizationPanel {
                     .attr('d', 'M0,-4L10,0L0,4Z')
                     .style('fill', '#569CD6');
 
-                // Add contains marker (filled diamond for composition)
                 defs.selectAll('#general-contains').remove();
                 defs.append('marker')
                     .attr('id', 'general-contains')
@@ -8195,7 +8609,6 @@ export class VisualizationPanel {
                     .attr('d', 'M-5,0L0,-4L5,0L0,4Z')
                     .style('fill', '#4EC9B0');
 
-                // Add connect marker (no arrow, just line end)
                 defs.selectAll('#general-connect').remove();
                 defs.append('marker')
                     .attr('id', 'general-connect')
@@ -8211,435 +8624,21 @@ export class VisualizationPanel {
                     .attr('r', 3)
                     .style('fill', '#D7BA7D');
 
-                // Collect relationships
-                function collectRelationships(elements) {
-                    if (!elements) return;
-                    elements.forEach(function(el) {
-                        if (el.relationships) {
-                            el.relationships.forEach(function(rel) {
-                                var tgt = rel.target || rel.relatedElement;
-                                if (elementMap.has(el.name) && elementMap.has(tgt)) {
-                                    connections.push({
-                                        source: el.name,
-                                        target: tgt,
-                                        type: rel.type || 'relates'
-                                    });
-                                }
-                            });
-                        }
-                        if (el.children) collectRelationships(el.children);
-                    });
-                }
-                collectRelationships(elementsData);
+                defs.selectAll('#general-arrow').remove();
+                defs.append('marker')
+                    .attr('id', 'general-arrow')
+                    .attr('viewBox', '0 -5 10 10')
+                    .attr('refX', 8)
+                    .attr('refY', 0)
+                    .attr('markerWidth', 5)
+                    .attr('markerHeight', 5)
+                    .attr('orient', 'auto')
+                    .append('path')
+                    .attr('d', 'M0,-4L10,0L0,4')
+                    .style('fill', 'var(--vscode-charts-blue)');
 
-                // Add part-to-def links (specialization / typed-by / contains relationships)
-                partToDefLinks.forEach(function(link) {
-                    if (elementMap.has(link.source) && elementMap.has(link.target)) {
-                        connections.push({
-                            source: link.source,
-                            target: link.target,
-                            type: link.type,
-                            isSpecialization: link.type === 'specializes',
-                            isTypedBy: link.type === 'typed by',
-                            isContains: link.type === 'contains'
-                        });
-                    }
-                });
-
-                // Draw connections with orthogonal routing
-                var drawnEdges = new Set();
-                var edgeOffsets = {}; // Track offsets for parallel edges
-
-                connections.forEach(function(conn) {
-                    var srcPos = nodePositions.get(conn.source);
-                    var tgtPos = nodePositions.get(conn.target);
-                    if (!srcPos || !tgtPos || conn.source === conn.target) return;
-
-                    var edgeKey = conn.source + '->' + conn.target;
-                    var reverseKey = conn.target + '->' + conn.source;
-                    if (drawnEdges.has(edgeKey)) return;
-                    drawnEdges.add(edgeKey);
-
-                    // Calculate edge offset for parallel edges
-                    var pairKey = [conn.source, conn.target].sort().join('--');
-                    edgeOffsets[pairKey] = (edgeOffsets[pairKey] || 0) + 1;
-                    var offset = (edgeOffsets[pairKey] - 1) * 15;
-
-                    var srcCx = srcPos.x + srcPos.width / 2;
-                    var srcCy = srcPos.y + srcPos.height / 2;
-                    var tgtCx = tgtPos.x + tgtPos.width / 2;
-                    var tgtCy = tgtPos.y + tgtPos.height / 2;
-                    var dx = tgtCx - srcCx;
-                    var dy = tgtCy - srcCy;
-
-                    // Determine exit/entry points based on relative positions
-                    var x1, y1, x2, y2;
-                    if (Math.abs(dx) > Math.abs(dy)) {
-                        // Horizontal routing
-                        x1 = dx > 0 ? srcPos.x + srcPos.width : srcPos.x;
-                        y1 = srcCy + offset;
-                        x2 = dx > 0 ? tgtPos.x : tgtPos.x + tgtPos.width;
-                        y2 = tgtCy + offset;
-                    } else {
-                        // Vertical routing
-                        x1 = srcCx + offset;
-                        y1 = dy > 0 ? srcPos.y + srcPos.height : srcPos.y;
-                        x2 = tgtCx + offset;
-                        y2 = dy > 0 ? tgtPos.y : tgtPos.y + tgtPos.height;
-                    }
-
-                    // Build orthogonal path
-                    var midX = (x1 + x2) / 2;
-                    var midY = (y1 + y2) / 2;
-                    var pathD;
-                    if (Math.abs(dx) > Math.abs(dy)) {
-                        pathD = 'M' + x1 + ',' + y1 + ' L' + midX + ',' + y1 + ' L' + midX + ',' + y2 + ' L' + x2 + ',' + y2;
-                    } else {
-                        pathD = 'M' + x1 + ',' + y1 + ' L' + x1 + ',' + midY + ' L' + x2 + ',' + midY + ' L' + x2 + ',' + y2;
-                    }
-
-                    // Style based on relationship type - SysML v2 compliant
-                    var strokeColor, strokeDash, markerEnd, strokeWidth;
-
-                    if (conn.isSpecialization) {
-                        // :> specialization - purple hollow triangle
-                        strokeColor = '#C586C0';
-                        strokeDash = 'none';
-                        markerEnd = 'url(#general-specializes)';
-                        strokeWidth = '1.5px';
-                    } else if (conn.isTypedBy || conn.type === 'typed by') {
-                        // : typed-by - blue dashed with solid arrow
-                        strokeColor = '#569CD6';
-                        strokeDash = '5,3';
-                        markerEnd = 'url(#general-typed-by)';
-                        strokeWidth = '1.5px';
-                    } else if (conn.isContains || conn.type === 'contains') {
-                        // contains - green solid with filled diamond
-                        strokeColor = '#4EC9B0';
-                        strokeDash = 'none';
-                        markerEnd = 'url(#general-contains)';
-                        strokeWidth = '1.5px';
-                    } else if (conn.type === 'connect' || conn.type === 'interface') {
-                        // connect/interface - gold with circle end
-                        strokeColor = '#D7BA7D';
-                        strokeDash = 'none';
-                        markerEnd = 'url(#general-connect)';
-                        strokeWidth = '2px';
-                    } else if (conn.type === 'bind') {
-                        // bind - gray dotted
-                        strokeColor = '#808080';
-                        strokeDash = '2,2';
-                        markerEnd = 'none';
-                        strokeWidth = '1px';
-                    } else if (conn.type === 'allocate') {
-                        // allocate - dashed with arrow
-                        strokeColor = '#D4D4D4';
-                        strokeDash = '8,4';
-                        markerEnd = 'url(#general-arrow)';
-                        strokeWidth = '1.5px';
-                    } else if (conn.type === 'flow') {
-                        // flow - solid with filled arrow
-                        strokeColor = '#4EC9B0';
-                        strokeDash = 'none';
-                        markerEnd = 'url(#general-arrow)';
-                        strokeWidth = '2px';
-                    } else {
-                        // default relationship
-                        strokeColor = 'var(--vscode-charts-blue)';
-                        strokeDash = 'none';
-                        markerEnd = 'url(#general-arrow)';
-                        strokeWidth = '1.5px';
-                    }
-
-                    // Create the relationship edge path with highlighting capability
-                    var edgePath = edgeGroup.append('path')
-                        .attr('d', pathD)
-                        .attr('class', 'relationship-edge general-connector')
-                        .attr('data-connector-id', 'rel-' + conn.source + '-' + conn.target)
-                        .attr('data-source', conn.source)
-                        .attr('data-target', conn.target)
-                        .attr('data-type', conn.type || 'relates')
-                        .style('fill', 'none')
-                        .style('stroke', strokeColor)
-                        .style('stroke-width', strokeWidth)
-                        .style('stroke-dasharray', strokeDash)
-                        .style('opacity', 0.85)
-                        .style('marker-end', markerEnd)
-                        .style('cursor', 'pointer');
-
-                    // Store original styles for unhighlighting
-                    var origStroke = strokeColor;
-                    var origWidth = strokeWidth;
-
-                    // Click handler to highlight connector end-to-end
-                    edgePath.on('click', function(event) {
-                        event.stopPropagation();
-
-                        // Clear any previous general connector highlights
-                        d3.selectAll('.general-connector').each(function() {
-                            var el = d3.select(this);
-                            var os = el.attr('data-original-stroke');
-                            var ow = el.attr('data-original-width');
-                            if (os) {
-                                el.style('stroke', os)
-                                  .style('stroke-width', ow)
-                                  .classed('connector-highlighted', false);
-                                el.attr('data-original-stroke', null)
-                                  .attr('data-original-width', null);
-                            }
-                        });
-
-                        // Highlight this connector
-                        var self = d3.select(this);
-                        self.attr('data-original-stroke', origStroke)
-                            .attr('data-original-width', origWidth)
-                            .style('stroke', '#FFD700')
-                            .style('stroke-width', '4px')
-                            .classed('connector-highlighted', true);
-
-                        // Bring to front
-                        this.parentNode.appendChild(this);
-
-                        // Post message for potential navigation/info
-                        vscode.postMessage({
-                            command: 'connectorSelected',
-                            source: conn.source,
-                            target: conn.target,
-                            type: conn.type
-                        });
-                    });
-
-                    // Hover effect
-                    edgePath.on('mouseenter', function() {
-                        var self = d3.select(this);
-                        if (!self.classed('connector-highlighted')) {
-                            self.style('stroke-width', '3px');
-                        }
-                    });
-
-                    edgePath.on('mouseleave', function() {
-                        var self = d3.select(this);
-                        if (!self.classed('connector-highlighted')) {
-                            self.style('stroke-width', origWidth);
-                        }
-                    });
-
-                    // Add label at midpoint with SysML v2 notation
-                    if (conn.type) {
-                        var labelX = Math.abs(dx) > Math.abs(dy) ? midX : (x1 + x2) / 2;
-                        var labelY = Math.abs(dx) > Math.abs(dy) ? (y1 + y2) / 2 - 6 : midY - 6;
-
-                        // Use SysML v2 notation symbols
-                        var labelText = conn.type;
-                        if (conn.isSpecialization || conn.type === 'specializes') labelText = ':>';
-                        else if (conn.isTypedBy || conn.type === 'typed by') labelText = ':';
-                        else if (conn.isContains || conn.type === 'contains') labelText = '◆';
-                        else if (conn.type === 'connect') labelText = 'connect';
-                        else if (conn.type === 'bind') labelText = '=';
-                        else if (conn.type === 'allocate') labelText = '\\u00ABallocate\\u00BB';
-                        else if (conn.type === 'flow') labelText = 'flow';
-                        else if (conn.type.length > 12) labelText = conn.type.substring(0, 10) + '..';
-
-                        // Add background for label readability
-                        var labelBg = edgeGroup.append('rect')
-                            .attr('x', labelX - 20)
-                            .attr('y', labelY - 8)
-                            .attr('width', 40)
-                            .attr('height', 12)
-                            .attr('rx', 2)
-                            .style('fill', 'var(--vscode-editor-background)')
-                            .style('opacity', 0.9);
-
-                        edgeGroup.append('text')
-                            .attr('x', labelX)
-                            .attr('y', labelY)
-                            .attr('text-anchor', 'middle')
-                            .text(labelText)
-                            .style('font-size', '9px')
-                            .style('font-weight', 'bold')
-                            .style('fill', strokeColor);
-                    }
-                });
-
-                // Collect and draw port-to-port connections from connection/interface children
-                var portConnections = [];
-                function collectPortConnections(elements) {
-                    if (!elements) return;
-                    elements.forEach(function(el) {
-                        var elType = (el.type || '').toLowerCase();
-                        // Look for connection, interface, connect, or bind type elements
-                        if (elType.includes('connection') || elType.includes('interface') || elType.includes('connect') || elType === 'bind') {
-                            // Check for 'from' and 'to' in attributes (from parser)
-                            var fromAttr = el.attributes && el.attributes.get ? el.attributes.get('from') : (el.attributes && el.attributes.from);
-                            var toAttr = el.attributes && el.attributes.get ? el.attributes.get('to') : (el.attributes && el.attributes.to);
-                            if (fromAttr && toAttr) {
-                                // Extract port names (handle qualified names like part.port)
-                                var fromPort = fromAttr.split('.').pop();
-                                var toPort = toAttr.split('.').pop();
-                                portConnections.push({
-                                    name: el.name,
-                                    fromPort: fromPort,
-                                    toPort: toPort,
-                                    fromFull: fromAttr,
-                                    toFull: toAttr,
-                                    type: elType === 'bind' ? 'bind' : 'connect'
-                                });
-                            }
-                        }
-
-                        // Also check children for 'end' declarations (SysML v2 connection syntax)
-                        if (el.children && el.children.length > 0 && (elType.includes('connection') || elType.includes('interface'))) {
-                            var ends = [];
-                            el.children.forEach(function(child) {
-                                var childType = (child.type || '').toLowerCase();
-                                if (childType === 'end' || child.name === 'end') {
-                                    var ref = child.attributes && child.attributes.get ? child.attributes.get('reference') || child.attributes.get('typedBy') : '';
-                                    if (!ref && child.attributes) ref = child.attributes.reference || child.attributes.typedBy || '';
-                                    if (ref) ends.push(ref);
-                                }
-                            });
-                            if (ends.length >= 2) {
-                                portConnections.push({
-                                    name: el.name,
-                                    fromPort: ends[0].split('.').pop(),
-                                    toPort: ends[1].split('.').pop(),
-                                    fromFull: ends[0],
-                                    toFull: ends[1],
-                                    type: 'connect'
-                                });
-                            }
-                        }
-
-                        // Recursively check children
-                        if (el.children) collectPortConnections(el.children);
-                    });
-                }
-                collectPortConnections(elementsData);
-
-                // Draw port-to-port connections
-                portConnections.forEach(function(pConn) {
-                    var fromPos = portPositions.get(pConn.fromPort);
-                    var toPos = portPositions.get(pConn.toPort);
-
-                    if (!fromPos || !toPos) return; // Skip if ports not found
-
-                    // Draw connection line between ports
-                    var x1 = fromPos.x;
-                    var y1 = fromPos.y;
-                    var x2 = toPos.x;
-                    var y2 = toPos.y;
-
-                    // Add some offset from node edge for cleaner routing
-                    if (fromPos.side === 'left') x1 -= 5;
-                    else if (fromPos.side === 'right') x1 += 5;
-                    if (toPos.side === 'left') x2 -= 5;
-                    else if (toPos.side === 'right') x2 += 5;
-
-                    // Calculate orthogonal path
-                    var midX = (x1 + x2) / 2;
-                    var midY = (y1 + y2) / 2;
-                    var dx = x2 - x1;
-                    var dy = y2 - y1;
-
-                    var pathD;
-                    if (Math.abs(dx) > Math.abs(dy)) {
-                        pathD = 'M' + x1 + ',' + y1 + ' L' + midX + ',' + y1 + ' L' + midX + ',' + y2 + ' L' + x2 + ',' + y2;
-                    } else {
-                        pathD = 'M' + x1 + ',' + y1 + ' L' + x1 + ',' + midY + ' L' + x2 + ',' + midY + ' L' + x2 + ',' + y2;
-                    }
-
-                    // Different styles for bind vs connect
-                    var isBind = pConn.type === 'bind';
-                    var strokeColor = isBind ? '#569CD6' : '#D7BA7D'; // Blue for bind, Gold for connect
-                    var strokeDash = isBind ? '4,2' : 'none'; // Dashed for bind, solid for connect
-
-                    // Draw the port connection edge with highlighting capability
-                    var portEdge = edgeGroup.append('path')
-                        .attr('d', pathD)
-                        .attr('class', 'port-connection-edge general-connector')
-                        .attr('data-connector-id', 'port-' + pConn.fromPort + '-' + pConn.toPort)
-                        .attr('data-source', pConn.fromFull || pConn.fromPort)
-                        .attr('data-target', pConn.toFull || pConn.toPort)
-                        .attr('data-type', pConn.type || 'connect')
-                        .style('fill', 'none')
-                        .style('stroke', strokeColor)
-                        .style('stroke-width', '2px')
-                        .style('stroke-dasharray', strokeDash)
-                        .style('opacity', 0.9)
-                        .style('marker-end', 'url(#general-connect)')
-                        .style('marker-start', 'url(#general-connect)')
-                        .style('cursor', 'pointer');
-
-                    // Store original styles for unhighlighting
-                    var portOrigStroke = strokeColor;
-                    var portOrigWidth = '2px';
-
-                    // Click handler to highlight connector
-                    portEdge.on('click', function(event) {
-                        event.stopPropagation();
-
-                        // Clear any previous general connector highlights
-                        d3.selectAll('.general-connector').each(function() {
-                            var el = d3.select(this);
-                            var os = el.attr('data-original-stroke');
-                            var ow = el.attr('data-original-width');
-                            if (os) {
-                                el.style('stroke', os)
-                                  .style('stroke-width', ow)
-                                  .classed('connector-highlighted', false);
-                                el.attr('data-original-stroke', null)
-                                  .attr('data-original-width', null);
-                            }
-                        });
-
-                        // Highlight this connector
-                        var self = d3.select(this);
-                        self.attr('data-original-stroke', portOrigStroke)
-                            .attr('data-original-width', portOrigWidth)
-                            .style('stroke', '#FFD700')
-                            .style('stroke-width', '4px')
-                            .classed('connector-highlighted', true);
-
-                        // Bring to front
-                        this.parentNode.appendChild(this);
-
-                        // Post message for potential navigation/info
-                        vscode.postMessage({
-                            command: 'connectorSelected',
-                            source: pConn.fromFull || pConn.fromPort,
-                            target: pConn.toFull || pConn.toPort,
-                            type: pConn.type,
-                            name: pConn.name
-                        });
-                    });
-
-                    // Hover effect
-                    portEdge.on('mouseenter', function() {
-                        var self = d3.select(this);
-                        if (!self.classed('connector-highlighted')) {
-                            self.style('stroke-width', '3px');
-                        }
-                    });
-
-                    portEdge.on('mouseleave', function() {
-                        var self = d3.select(this);
-                        if (!self.classed('connector-highlighted')) {
-                            self.style('stroke-width', portOrigWidth);
-                        }
-                    });
-
-                    // Add connection label if named
-                    if (pConn.name) {
-                        edgeGroup.append('text')
-                            .attr('x', midX)
-                            .attr('y', midY - 6)
-                            .attr('text-anchor', 'middle')
-                            .text(pConn.name.length > 15 ? pConn.name.substring(0, 13) + '..' : pConn.name)
-                            .style('font-size', '8px')
-                            .style('fill', strokeColor)
-                            .style('font-style', 'italic');
-                    }
-                });
+                // Initial edge drawing
+                drawGeneralEdges();
 
             } catch (error) {
                 console.error('[General] Error:', error);
@@ -9637,441 +9636,459 @@ export class VisualizationPanel {
 
             // Draw connectors FIRST (behind parts)
             // Create connector group - paths only, labels will be added later
-            const connectorGroup = g.append('g').attr('class', 'ibd-connectors');
+            let connectorGroup = g.append('g').attr('class', 'ibd-connectors');
 
             // Track used label positions to avoid overlaps
-            const usedLabelPositions = [];
+            let usedLabelPositions = [];
 
             // Collect label data to render after parts (so labels are on top)
-            const pendingLabels = [];
+            let pendingLabels = [];
 
-            // Pre-process connectors: group by node pairs for even distribution
-            // Also track per-port connections to avoid overlaps
-            const nodePairConnectors = new Map();
-            const portConnections = new Map();  // Track connections per port
+            // Function to draw/redraw IBD connectors based on current part positions
+            function drawIbdConnectors() {
+                // Clear existing connectors and labels
+                g.selectAll('.ibd-connectors').remove();
+                g.selectAll('.ibd-connector-labels').remove();
 
-            connectors.forEach((connector, idx) => {
-                const srcPos = findPartPos(connector.sourceId);
-                const tgtPos = findPartPos(connector.targetId);
-                if (!srcPos || !tgtPos) return;
+                // Recreate connector group (insert before parts)
+                connectorGroup = g.insert('g', '.ibd-parts').attr('class', 'ibd-connectors');
+                usedLabelPositions = [];
+                pendingLabels = [];
 
-                // Create a canonical key for this node pair (sorted for bidirectional)
-                const srcKey = srcPos.part.name;
-                const tgtKey = tgtPos.part.name;
-                const pairKey = srcKey < tgtKey ? srcKey + '|' + tgtKey : tgtKey + '|' + srcKey;
+                // Pre-process connectors: group by node pairs for even distribution
+                // Also track per-port connections to avoid overlaps
+                const nodePairConnectors = new Map();
+                const portConnections = new Map();  // Track connections per port
 
-                if (!nodePairConnectors.has(pairKey)) {
-                    nodePairConnectors.set(pairKey, []);
-                }
-                nodePairConnectors.get(pairKey).push({ connector, idx });
+                connectors.forEach((connector, idx) => {
+                    const srcPos = findPartPos(connector.sourceId);
+                    const tgtPos = findPartPos(connector.targetId);
+                    if (!srcPos || !tgtPos) return;
 
-                // Track port-specific connections
-                const srcPortName = connector.sourceId ? connector.sourceId.split('.').pop() : null;
-                const tgtPortName = connector.targetId ? connector.targetId.split('.').pop() : null;
-                const portKey = srcKey + '.' + (srcPortName || 'edge') + '->' + tgtKey + '.' + (tgtPortName || 'edge');
+                    // Create a canonical key for this node pair (sorted for bidirectional)
+                    const srcKey = srcPos.part.name;
+                    const tgtKey = tgtPos.part.name;
+                    const pairKey = srcKey < tgtKey ? srcKey + '|' + tgtKey : tgtKey + '|' + srcKey;
 
-                if (!portConnections.has(portKey)) {
-                    portConnections.set(portKey, []);
-                }
-                portConnections.get(portKey).push({ connector, idx });
-            });
-
-            // Calculate offset for each connector based on its position in the node pair group
-            const connectorOffsets = new Map();
-            nodePairConnectors.forEach((group, pairKey) => {
-                const count = group.length;
-                const step = 25;  // Increased spacing between connectors for clarity
-                group.forEach((item, i) => {
-                    // Distribute evenly from center: offset = (i - (count-1)/2) * step
-                    const offset = (i - (count - 1) / 2) * step;
-                    connectorOffsets.set(item.idx, { offset, groupIndex: i, groupCount: count });
-                });
-            });
-
-            // Pre-populate usedLabelPositions with port label areas to avoid connector labels overlapping ports
-            partPositions.forEach((pos, partName) => {
-                if (partName !== pos.part.name) return;
-                const part = pos.part;
-                const partPorts = ports.filter(p => p && (p.parentId === part.name || p.parentId === part.id));
-                const portStartY = (part.attributes && (part.attributes.get && (part.attributes.get('partType') || part.attributes.get('type')))) ? 70 : 58;
-
-                // Reserve space for left-side port labels
-                partPorts.forEach((p, i) => {
-                    const portY = pos.y + portStartY + i * 28;
-                    // Left side label area
-                    usedLabelPositions.push({ x: pos.x - 50, y: portY, width: 80, height: 20 });
-                    // Right side label area
-                    usedLabelPositions.push({ x: pos.x + partWidth + 50, y: portY, width: 80, height: 20 });
-                });
-            });
-
-            // Helper to find port position on a part
-            const findPortPosition = (partPos, portName, isSource) => {
-                if (!partPos || !portName) return null;
-
-                const part = partPos.part;
-                const partPorts = ports.filter(p => p && (p.parentId === part.name || p.parentId === part.id));
-
-                // Find the specific port
-                const portNameLower = portName.toLowerCase();
-                const port = partPorts.find(p => p && p.name &&
-                    (p.name.toLowerCase() === portNameLower || portName.toLowerCase().includes(p.name.toLowerCase())));
-
-                if (!port) {
-                    // Port not found - return edge of node
-                    return null;
-                }
-
-                // Determine port position based on direction
-                const portDirection = port.direction || 'inout';
-                const isInPort = portDirection === 'in' || (port.name && port.name.toLowerCase().includes('in'));
-                const isOutPort = portDirection === 'out' || (port.name && port.name.toLowerCase().includes('out'));
-
-                // Find port index among same-direction ports
-                const inPorts = partPorts.filter(p => p && p.name && (p.direction === 'in' || (p.name && p.name.toLowerCase().includes('in'))));
-                const outPorts = partPorts.filter(p => p && p.name && (p.direction === 'out' || (p.name && p.name.toLowerCase().includes('out'))));
-                const inoutPorts = partPorts.filter(p => p && p.name && !inPorts.includes(p) && !outPorts.includes(p));
-
-                const portSize = 14;
-                const portSpacing = 28;
-                const contentStartY = part.attributes && (part.attributes.get && (part.attributes.get('partType') || part.attributes.get('type'))) ? 50 : 38;
-                const portStartY = contentStartY + 20;
-
-                let portY, portX;
-
-                if (isInPort) {
-                    const idx = inPorts.findIndex(p => p.name === port.name);
-                    portY = partPos.y + portStartY + idx * portSpacing;
-                    portX = partPos.x; // Left edge
-                } else if (isOutPort) {
-                    const idx = outPorts.findIndex(p => p.name === port.name);
-                    portY = partPos.y + portStartY + idx * portSpacing;
-                    portX = partPos.x + partWidth; // Right edge
-                } else {
-                    const idx = inoutPorts.findIndex(p => p.name === port.name);
-                    portY = partPos.y + portStartY + inPorts.length * portSpacing + idx * portSpacing;
-                    portX = partPos.x; // Left edge
-                }
-
-                return { x: portX, y: portY, direction: portDirection, isLeft: portX === partPos.x };
-            };
-
-            connectors.forEach((connector, connIdx) => {
-                const srcPos = findPartPos(connector.sourceId);
-                const tgtPos = findPartPos(connector.targetId);
-
-                if (!srcPos || !tgtPos) {
-                    return;
-                }
-
-                // Try to find actual port positions from connector source/target IDs
-                const srcPortName = connector.sourceId ? connector.sourceId.split('.').pop() : null;
-                const tgtPortName = connector.targetId ? connector.targetId.split('.').pop() : null;
-
-                const srcPortPos = findPortPosition(srcPos, srcPortName, true);
-                const tgtPortPos = findPortPosition(tgtPos, tgtPortName, false);
-
-                // Get dynamic heights for each part
-                const srcHeight = srcPos.height || 80;
-                const tgtHeight = tgtPos.height || 80;
-
-                // Get pre-calculated offset for this connector (evenly distributed from center)
-                const offsetInfo = connectorOffsets.get(connIdx) || { offset: 0, groupIndex: 0, groupCount: 1 };
-                const baseOffset = offsetInfo.offset;
-
-                // Calculate connection points - use port positions if found, otherwise node edges
-                let srcX, srcY, tgtX, tgtY;
-
-                if (srcPortPos) {
-                    srcX = srcPortPos.x;
-                    srcY = srcPortPos.y;
-                } else {
-                    // Default to node center edge with offset
-                    srcX = srcPos.x + partWidth / 2;
-                    srcY = srcPos.y + srcHeight / 2 + baseOffset;
-                }
-
-                if (tgtPortPos) {
-                    tgtX = tgtPortPos.x;
-                    tgtY = tgtPortPos.y;
-                } else {
-                    // Default to node center edge with offset
-                    tgtX = tgtPos.x + partWidth / 2;
-                    tgtY = tgtPos.y + tgtHeight / 2 + baseOffset;
-                }
-
-                const dx = tgtX - srcX;
-                const dy = tgtY - srcY;
-
-                // Base standoff distance from node edges - connectors route this far from nodes
-                const standoff = 50;
-
-                let pathD;
-                let labelX, labelY;
-
-                // Route based on port positions
-                if (srcPortPos && tgtPortPos) {
-                    // Both ports found - create clean orthogonal path between them
-                    const srcIsLeft = srcPortPos.isLeft;
-                    const tgtIsLeft = tgtPortPos.isLeft;
-
-                    // Apply offset to source/target Y for multiple connectors to same port
-                    // Use larger offset to ensure connectors are visually separated
-                    const offsetSrcY = srcY + baseOffset * 0.5;
-                    const offsetTgtY = tgtY + baseOffset * 0.5;
-
-                    if (srcIsLeft && tgtIsLeft) {
-                        // Both on left sides - route left, stagger the routing X by offset
-                        const routeX = Math.min(srcPos.x, tgtPos.x) - standoff - baseOffset;
-                        pathD = 'M' + srcX + ',' + offsetSrcY +
-                                ' L' + routeX + ',' + offsetSrcY +
-                                ' L' + routeX + ',' + offsetTgtY +
-                                ' L' + tgtX + ',' + offsetTgtY;
-                        // Position label centered on the vertical routing segment
-                        labelX = routeX;
-                        labelY = (offsetSrcY + offsetTgtY) / 2;
-                    } else if (!srcIsLeft && !tgtIsLeft) {
-                        // Both on right sides - route right, stagger the routing X by offset
-                        const routeX = Math.max(srcPos.x + partWidth, tgtPos.x + partWidth) + standoff + baseOffset;
-                        pathD = 'M' + srcX + ',' + offsetSrcY +
-                                ' L' + routeX + ',' + offsetSrcY +
-                                ' L' + routeX + ',' + offsetTgtY +
-                                ' L' + tgtX + ',' + offsetTgtY;
-                        // Position label centered on the vertical routing segment
-                        labelX = routeX;
-                        labelY = (offsetSrcY + offsetTgtY) / 2;
-                    } else {
-                        // Opposite sides - direct horizontal with vertical segment, stagger midX by offset
-                        const midX = (srcX + tgtX) / 2 + baseOffset;
-                        pathD = 'M' + srcX + ',' + offsetSrcY +
-                                ' L' + midX + ',' + offsetSrcY +
-                                ' L' + midX + ',' + offsetTgtY +
-                                ' L' + tgtX + ',' + offsetTgtY;
-                        // Position label centered on the vertical segment
-                        labelX = midX;
-                        labelY = (offsetSrcY + offsetTgtY) / 2;
+                    if (!nodePairConnectors.has(pairKey)) {
+                        nodePairConnectors.set(pairKey, []);
                     }
-                } else {
-                    // Fallback - connect node edges with orthogonal routing
-                    const srcCx = srcPos.x + partWidth / 2;
-                    const srcCy = srcPos.y + srcHeight / 2;
-                    const tgtCx = tgtPos.x + partWidth / 2;
-                    const tgtCy = tgtPos.y + tgtHeight / 2;
+                    nodePairConnectors.get(pairKey).push({ connector, idx });
 
-                    if (Math.abs(tgtCx - srcCx) > Math.abs(tgtCy - srcCy)) {
-                        // Horizontal connection - stagger the vertical segment by baseOffset
-                        const exitX = tgtCx > srcCx ? srcPos.x + partWidth : srcPos.x;
-                        const enterX = tgtCx > srcCx ? tgtPos.x : tgtPos.x + partWidth;
-                        const midX = (exitX + enterX) / 2 + baseOffset;
-                        const y1 = srcCy + baseOffset * 0.3;
-                        const y2 = tgtCy + baseOffset * 0.3;
+                    // Track port-specific connections
+                    const srcPortName = connector.sourceId ? connector.sourceId.split('.').pop() : null;
+                    const tgtPortName = connector.targetId ? connector.targetId.split('.').pop() : null;
+                    const portKey = srcKey + '.' + (srcPortName || 'edge') + '->' + tgtKey + '.' + (tgtPortName || 'edge');
 
-                        pathD = 'M' + exitX + ',' + y1 +
-                                ' L' + midX + ',' + y1 +
-                                ' L' + midX + ',' + y2 +
-                                ' L' + enterX + ',' + y2;
-                        // Position label centered on the vertical segment
-                        labelX = midX;
-                        labelY = (y1 + y2) / 2;
-                    } else {
-                        // Vertical connection - stagger the horizontal segment by baseOffset
-                        const exitY = tgtCy > srcCy ? srcPos.y + srcHeight : srcPos.y;
-                        const enterY = tgtCy > srcCy ? tgtPos.y : tgtPos.y + tgtHeight;
-                        const midY = (exitY + enterY) / 2 + baseOffset;
-                        const x1 = srcCx + baseOffset * 0.3;
-                        const x2 = tgtCx + baseOffset * 0.3;
-
-                        pathD = 'M' + x1 + ',' + exitY +
-                                ' L' + x1 + ',' + midY +
-                                ' L' + x2 + ',' + midY +
-                                ' L' + x2 + ',' + enterY;
-                        // Position label centered on the horizontal segment
-                        labelX = (x1 + x2) / 2;
-                        labelY = midY;
+                    if (!portConnections.has(portKey)) {
+                        portConnections.set(portKey, []);
                     }
-                }
+                    portConnections.get(portKey).push({ connector, idx });
+                });
 
-                // Determine connector type and style (SysML v2 conventions per spec 7.17)
-                const connTypeLower = (connector.type || '').toLowerCase();
-                const connNameLower = (connector.name || '').toLowerCase();
-                const isFlow = connTypeLower === 'flow' || connNameLower.includes('flow');
-                const isInterface = connTypeLower === 'interface' || connNameLower.includes('interface');
-                const isBinding = connTypeLower === 'binding' || connNameLower.includes('bind');
-                const isConnection = connTypeLower === 'connection' || connTypeLower === 'connect';
+                // Calculate offset for each connector based on its position in the node pair group
+                const connectorOffsets = new Map();
+                nodePairConnectors.forEach((group, pairKey) => {
+                    const count = group.length;
+                    const step = 25;  // Increased spacing between connectors for clarity
+                    group.forEach((item, i) => {
+                        // Distribute evenly from center: offset = (i - (count-1)/2) * step
+                        const offset = (i - (count - 1) / 2) * step;
+                        connectorOffsets.set(item.idx, { offset, groupIndex: i, groupCount: count });
+                    });
+                });
 
-                // SysML v2 connector styling:
-                // - Flows: solid line with filled arrow showing item flow direction
-                // - Interfaces: solid line with open arrow (conjugate relationship)
-                // - Bindings: dashed line (binding connection)
-                // - Connections: solid line with dots at ends
-                let strokeStyle = 'none';
-                let strokeWidth = '2px';
-                let markerStart = 'none';
-                let markerEnd = 'none';
-                let strokeColor = 'var(--vscode-charts-blue)';
+                // Pre-populate usedLabelPositions with port label areas to avoid connector labels overlapping ports
+                partPositions.forEach((pos, partName) => {
+                    if (partName !== pos.part.name) return;
+                    const part = pos.part;
+                    const partPorts = ports.filter(p => p && (p.parentId === part.name || p.parentId === part.id));
+                    const portStartY = (part.attributes && (part.attributes.get && (part.attributes.get('partType') || part.attributes.get('type')))) ? 70 : 58;
 
-                if (isFlow) {
-                    // Flow: filled arrow at target to show item flow direction
-                    markerEnd = 'url(#ibd-flow-arrow)';
-                    strokeColor = 'var(--vscode-charts-green)';
-                } else if (isInterface) {
-                    // Interface: open arrow, represents conjugate interface
-                    markerEnd = 'url(#ibd-interface-arrow)';
-                    strokeColor = 'var(--vscode-charts-purple)';
-                } else if (isBinding) {
-                    // Binding: dashed line
-                    strokeStyle = '6,4';
-                    strokeWidth = '1.5px';
-                    markerStart = 'url(#ibd-connection-dot)';
-                    markerEnd = 'url(#ibd-connection-dot)';
-                } else {
-                    // Connection: solid line with dots at both ends
-                    markerStart = 'url(#ibd-connection-dot)';
-                    markerEnd = 'url(#ibd-connection-dot)';
-                }
+                    // Reserve space for left-side port labels
+                    partPorts.forEach((p, i) => {
+                        const portY = pos.y + portStartY + i * 28;
+                        // Left side label area
+                        usedLabelPositions.push({ x: pos.x - 50, y: portY, width: 80, height: 20 });
+                        // Right side label area
+                        usedLabelPositions.push({ x: pos.x + partWidth + 50, y: portY, width: 80, height: 20 });
+                    });
+                });
 
-                // Create the connector path with click handler for highlighting
-                const connectorPath = connectorGroup.append('path')
-                    .attr('d', pathD)
-                    .attr('class', 'ibd-connector')
-                    .attr('data-connector-id', 'connector-' + connIdx)
-                    .attr('data-source', connector.sourceId || '')
-                    .attr('data-target', connector.targetId || '')
-                    .style('fill', 'none')
-                    .style('stroke', strokeColor)
-                    .style('stroke-width', strokeWidth)
-                    .style('stroke-dasharray', strokeStyle)
-                    .style('marker-start', markerStart)
-                    .style('marker-end', markerEnd)
-                    .style('cursor', 'pointer');
+                // Helper to find port position on a part
+                const findPortPosition = (partPos, portName, isSource) => {
+                    if (!partPos || !portName) return null;
 
-                // Store original styles for unhighlighting
-                const originalStroke = strokeColor;
-                const originalStrokeWidth = strokeWidth;
+                    const part = partPos.part;
+                    const partPorts = ports.filter(p => p && (p.parentId === part.name || p.parentId === part.id));
 
-                // Click handler to highlight connector end-to-end
-                connectorPath.on('click', function(event) {
-                    event.stopPropagation();
+                    // Find the specific port
+                    const portNameLower = portName.toLowerCase();
+                    const port = partPorts.find(p => p && p.name &&
+                        (p.name.toLowerCase() === portNameLower || portName.toLowerCase().includes(p.name.toLowerCase())));
 
-                    // Clear any previous connector highlights
-                    d3.selectAll('.ibd-connector').each(function() {
-                        const el = d3.select(this);
-                        const origStroke = el.attr('data-original-stroke');
-                        const origWidth = el.attr('data-original-width');
-                        if (origStroke) {
-                            el.style('stroke', origStroke)
-                              .style('stroke-width', origWidth)
-                              .classed('connector-highlighted', false);
-                            el.attr('data-original-stroke', null)
-                              .attr('data-original-width', null);
+                    if (!port) {
+                        // Port not found - return edge of node
+                        return null;
+                    }
+
+                    // Determine port position based on direction
+                    const portDirection = port.direction || 'inout';
+                    const isInPort = portDirection === 'in' || (port.name && port.name.toLowerCase().includes('in'));
+                    const isOutPort = portDirection === 'out' || (port.name && port.name.toLowerCase().includes('out'));
+
+                    // Find port index among same-direction ports
+                    const inPorts = partPorts.filter(p => p && p.name && (p.direction === 'in' || (p.name && p.name.toLowerCase().includes('in'))));
+                    const outPorts = partPorts.filter(p => p && p.name && (p.direction === 'out' || (p.name && p.name.toLowerCase().includes('out'))));
+                    const inoutPorts = partPorts.filter(p => p && p.name && !inPorts.includes(p) && !outPorts.includes(p));
+
+                    const portSize = 14;
+                    const portSpacing = 28;
+                    const contentStartY = part.attributes && (part.attributes.get && (part.attributes.get('partType') || part.attributes.get('type'))) ? 50 : 38;
+                    const portStartY = contentStartY + 20;
+
+                    let portY, portX;
+
+                    if (isInPort) {
+                        const idx = inPorts.findIndex(p => p.name === port.name);
+                        portY = partPos.y + portStartY + idx * portSpacing;
+                        portX = partPos.x; // Left edge
+                    } else if (isOutPort) {
+                        const idx = outPorts.findIndex(p => p.name === port.name);
+                        portY = partPos.y + portStartY + idx * portSpacing;
+                        portX = partPos.x + partWidth; // Right edge
+                    } else {
+                        const idx = inoutPorts.findIndex(p => p.name === port.name);
+                        portY = partPos.y + portStartY + inPorts.length * portSpacing + idx * portSpacing;
+                        portX = partPos.x; // Left edge
+                    }
+
+                    return { x: portX, y: portY, direction: portDirection, isLeft: portX === partPos.x };
+                };
+
+                connectors.forEach((connector, connIdx) => {
+                    const srcPos = findPartPos(connector.sourceId);
+                    const tgtPos = findPartPos(connector.targetId);
+
+                    if (!srcPos || !tgtPos) {
+                        return;
+                    }
+
+                    // Try to find actual port positions from connector source/target IDs
+                    const srcPortName = connector.sourceId ? connector.sourceId.split('.').pop() : null;
+                    const tgtPortName = connector.targetId ? connector.targetId.split('.').pop() : null;
+
+                    const srcPortPos = findPortPosition(srcPos, srcPortName, true);
+                    const tgtPortPos = findPortPosition(tgtPos, tgtPortName, false);
+
+                    // Get dynamic heights for each part
+                    const srcHeight = srcPos.height || 80;
+                    const tgtHeight = tgtPos.height || 80;
+
+                    // Get pre-calculated offset for this connector (evenly distributed from center)
+                    const offsetInfo = connectorOffsets.get(connIdx) || { offset: 0, groupIndex: 0, groupCount: 1 };
+                    const baseOffset = offsetInfo.offset;
+
+                    // Calculate connection points - use port positions if found, otherwise node edges
+                    let srcX, srcY, tgtX, tgtY;
+
+                    if (srcPortPos) {
+                        srcX = srcPortPos.x;
+                        srcY = srcPortPos.y;
+                    } else {
+                        // Fallback to node edge
+                        const srcCx = srcPos.x + partWidth / 2;
+                        const tgtCx = tgtPos.x + partWidth / 2;
+                        srcX = tgtCx > srcCx ? srcPos.x + partWidth : srcPos.x;
+                        srcY = srcPos.y + srcHeight / 2;
+                    }
+
+                    if (tgtPortPos) {
+                        tgtX = tgtPortPos.x;
+                        tgtY = tgtPortPos.y;
+                    } else {
+                        // Fallback to node edge
+                        const srcCx = srcPos.x + partWidth / 2;
+                        const tgtCx = tgtPos.x + partWidth / 2;
+                        tgtX = tgtCx > srcCx ? tgtPos.x : tgtPos.x + partWidth;
+                        tgtY = tgtPos.y + tgtHeight / 2;
+                    }
+
+                    // Build orthogonal path based on port positions
+                    let pathD;
+                    let labelX, labelY;
+                    const standoff = 40;
+
+                    if (srcPortPos && tgtPortPos) {
+                        // Port-to-port connection - route based on port side
+                        const srcIsLeft = srcPortPos.isLeft;
+                        const tgtIsLeft = tgtPortPos.isLeft;
+
+                        // Apply offset to source/target Y for multiple connectors to same port
+                        const offsetSrcY = srcY + baseOffset * 0.5;
+                        const offsetTgtY = tgtY + baseOffset * 0.5;
+
+                        if (srcIsLeft && tgtIsLeft) {
+                            // Both on left sides - route left
+                            const routeX = Math.min(srcPos.x, tgtPos.x) - standoff - baseOffset;
+                            pathD = 'M' + srcX + ',' + offsetSrcY +
+                                    ' L' + routeX + ',' + offsetSrcY +
+                                    ' L' + routeX + ',' + offsetTgtY +
+                                    ' L' + tgtX + ',' + offsetTgtY;
+                            labelX = routeX;
+                            labelY = (offsetSrcY + offsetTgtY) / 2;
+                        } else if (!srcIsLeft && !tgtIsLeft) {
+                            // Both on right sides - route right
+                            const routeX = Math.max(srcPos.x + partWidth, tgtPos.x + partWidth) + standoff + baseOffset;
+                            pathD = 'M' + srcX + ',' + offsetSrcY +
+                                    ' L' + routeX + ',' + offsetSrcY +
+                                    ' L' + routeX + ',' + offsetTgtY +
+                                    ' L' + tgtX + ',' + offsetTgtY;
+                            labelX = routeX;
+                            labelY = (offsetSrcY + offsetTgtY) / 2;
+                        } else {
+                            // Opposite sides - direct horizontal with vertical segment
+                            const midX = (srcX + tgtX) / 2 + baseOffset;
+                            pathD = 'M' + srcX + ',' + offsetSrcY +
+                                    ' L' + midX + ',' + offsetSrcY +
+                                    ' L' + midX + ',' + offsetTgtY +
+                                    ' L' + tgtX + ',' + offsetTgtY;
+                            labelX = midX;
+                            labelY = (offsetSrcY + offsetTgtY) / 2;
+                        }
+                    } else {
+                        // Fallback - connect node edges with orthogonal routing
+                        const srcCx = srcPos.x + partWidth / 2;
+                        const srcCy = srcPos.y + srcHeight / 2;
+                        const tgtCx = tgtPos.x + partWidth / 2;
+                        const tgtCy = tgtPos.y + tgtHeight / 2;
+
+                        if (Math.abs(tgtCx - srcCx) > Math.abs(tgtCy - srcCy)) {
+                            // Horizontal connection
+                            const exitX = tgtCx > srcCx ? srcPos.x + partWidth : srcPos.x;
+                            const enterX = tgtCx > srcCx ? tgtPos.x : tgtPos.x + partWidth;
+                            const midX = (exitX + enterX) / 2 + baseOffset;
+                            const y1 = srcCy + baseOffset * 0.3;
+                            const y2 = tgtCy + baseOffset * 0.3;
+
+                            pathD = 'M' + exitX + ',' + y1 +
+                                    ' L' + midX + ',' + y1 +
+                                    ' L' + midX + ',' + y2 +
+                                    ' L' + enterX + ',' + y2;
+                            labelX = midX;
+                            labelY = (y1 + y2) / 2;
+                        } else {
+                            // Vertical connection
+                            const exitY = tgtCy > srcCy ? srcPos.y + srcHeight : srcPos.y;
+                            const enterY = tgtCy > srcCy ? tgtPos.y : tgtPos.y + tgtHeight;
+                            const midY = (exitY + enterY) / 2 + baseOffset;
+                            const x1 = srcCx + baseOffset * 0.3;
+                            const x2 = tgtCx + baseOffset * 0.3;
+
+                            pathD = 'M' + x1 + ',' + exitY +
+                                    ' L' + x1 + ',' + midY +
+                                    ' L' + x2 + ',' + midY +
+                                    ' L' + x2 + ',' + enterY;
+                            labelX = (x1 + x2) / 2;
+                            labelY = midY;
+                        }
+                    }
+
+                    // Determine connector type and style
+                    const connTypeLower = (connector.type || '').toLowerCase();
+                    const connNameLower = (connector.name || '').toLowerCase();
+                    const isFlow = connTypeLower === 'flow' || connNameLower.includes('flow');
+                    const isInterface = connTypeLower === 'interface' || connNameLower.includes('interface');
+                    const isBinding = connTypeLower === 'binding' || connNameLower.includes('bind');
+
+                    let strokeStyle = 'none';
+                    let strokeWidth = '2px';
+                    let markerStart = 'none';
+                    let markerEnd = 'none';
+                    let strokeColor = 'var(--vscode-charts-blue)';
+
+                    if (isFlow) {
+                        markerEnd = 'url(#ibd-flow-arrow)';
+                        strokeColor = 'var(--vscode-charts-green)';
+                    } else if (isInterface) {
+                        markerEnd = 'url(#ibd-interface-arrow)';
+                        strokeColor = 'var(--vscode-charts-purple)';
+                    } else if (isBinding) {
+                        strokeStyle = '6,4';
+                        strokeWidth = '1.5px';
+                        markerStart = 'url(#ibd-connection-dot)';
+                        markerEnd = 'url(#ibd-connection-dot)';
+                    } else {
+                        markerStart = 'url(#ibd-connection-dot)';
+                        markerEnd = 'url(#ibd-connection-dot)';
+                    }
+
+                    // Create the connector path
+                    const connectorPath = connectorGroup.append('path')
+                        .attr('d', pathD)
+                        .attr('class', 'ibd-connector')
+                        .attr('data-connector-id', 'connector-' + connIdx)
+                        .attr('data-source', connector.sourceId || '')
+                        .attr('data-target', connector.targetId || '')
+                        .style('fill', 'none')
+                        .style('stroke', strokeColor)
+                        .style('stroke-width', strokeWidth)
+                        .style('stroke-dasharray', strokeStyle)
+                        .style('marker-start', markerStart)
+                        .style('marker-end', markerEnd)
+                        .style('cursor', 'pointer');
+
+                    // Store original styles for unhighlighting
+                    const originalStroke = strokeColor;
+                    const originalStrokeWidth = strokeWidth;
+
+                    // Click handler to highlight connector
+                    connectorPath.on('click', function(event) {
+                        event.stopPropagation();
+                        d3.selectAll('.ibd-connector').each(function() {
+                            const el = d3.select(this);
+                            const origStroke = el.attr('data-original-stroke');
+                            const origWidth = el.attr('data-original-width');
+                            if (origStroke) {
+                                el.style('stroke', origStroke)
+                                  .style('stroke-width', origWidth)
+                                  .classed('connector-highlighted', false);
+                                el.attr('data-original-stroke', null)
+                                  .attr('data-original-width', null);
+                            }
+                        });
+
+                        const self = d3.select(this);
+                        self.attr('data-original-stroke', originalStroke)
+                            .attr('data-original-width', originalStrokeWidth)
+                            .style('stroke', '#FFD700')
+                            .style('stroke-width', '4px')
+                            .classed('connector-highlighted', true);
+                        this.parentNode.appendChild(this);
+
+                        vscode.postMessage({
+                            command: 'connectorSelected',
+                            source: connector.sourceId,
+                            target: connector.targetId,
+                            type: connector.type,
+                            name: connector.name
+                        });
+                    });
+
+                    // Hover effect
+                    connectorPath.on('mouseenter', function() {
+                        const self = d3.select(this);
+                        if (!self.classed('connector-highlighted')) {
+                            self.style('stroke-width', '3px');
                         }
                     });
 
-                    // Highlight this connector
-                    const self = d3.select(this);
-                    self.attr('data-original-stroke', originalStroke)
-                        .attr('data-original-width', originalStrokeWidth)
-                        .style('stroke', '#FFD700')
-                        .style('stroke-width', '4px')
-                        .classed('connector-highlighted', true);
-
-                    // Bring to front
-                    this.parentNode.appendChild(this);
-
-                    // Post message for potential navigation/info
-                    vscode.postMessage({
-                        command: 'connectorSelected',
-                        source: connector.sourceId,
-                        target: connector.targetId,
-                        type: connector.type,
-                        name: connector.name
+                    connectorPath.on('mouseleave', function() {
+                        const self = d3.select(this);
+                        if (!self.classed('connector-highlighted')) {
+                            self.style('stroke-width', originalStrokeWidth);
+                        }
                     });
-                });
 
-                // Hover effect
-                connectorPath.on('mouseenter', function() {
-                    const self = d3.select(this);
-                    if (!self.classed('connector-highlighted')) {
-                        self.style('stroke-width', '3px');
-                    }
-                });
+                    // Connection label
+                    const label = connector.name || '';
+                    if (label && label !== 'connection' && label !== 'connector') {
+                        const displayLabel = label.length > 20 ? label.substring(0, 18) + '..' : label;
+                        const labelWidth = displayLabel.length * 7 + 20;
+                        const labelHeight = 20;
 
-                connectorPath.on('mouseleave', function() {
-                    const self = d3.select(this);
-                    if (!self.classed('connector-highlighted')) {
-                        self.style('stroke-width', originalStrokeWidth);
-                    }
-                });
+                        // Check for overlaps and find non-overlapping position
+                        let finalLabelX = labelX;
+                        let finalLabelY = labelY;
+                        let attempts = 0;
+                        const maxAttempts = 8;
+                        const offsets = [0, -25, 25, -50, 50, -75, 75, -100];
 
-                // Connection label positioned away from path to avoid overlap
-                const label = connector.name || '';
-                if (label && label !== 'connection' && label !== 'connector') {
-                    const displayLabel = label.length > 20 ? label.substring(0, 18) + '..' : label;
-                    const labelWidth = displayLabel.length * 7 + 20;
-                    const labelHeight = 20;
+                        while (attempts < maxAttempts) {
+                            const testY = labelY + offsets[attempts];
+                            const hasOverlap = usedLabelPositions.some(pos => {
+                                return Math.abs(pos.x - labelX) < (pos.width + labelWidth) / 2 + 10 &&
+                                       Math.abs(pos.y - testY) < (pos.height + labelHeight) / 2 + 5;
+                            });
 
-                    // Find a non-overlapping position for the label
-                    let finalLabelX = labelX;
-                    let finalLabelY = labelY;
-
-                    // Check for overlap with existing labels and adjust
-                    let attempts = 0;
-                    const maxAttempts = 8;
-                    while (attempts < maxAttempts) {
-                        let hasOverlap = false;
-                        for (const used of usedLabelPositions) {
-                            const overlapX = Math.abs(finalLabelX - used.x) < (labelWidth / 2 + used.width / 2 + 10);
-                            const overlapY = Math.abs(finalLabelY - used.y) < (labelHeight / 2 + used.height / 2 + 5);
-                            if (overlapX && overlapY) {
-                                hasOverlap = true;
+                            if (!hasOverlap) {
+                                finalLabelY = testY;
                                 break;
                             }
+                            attempts++;
                         }
-                        if (!hasOverlap) break;
 
-                        // Offset the label to avoid overlap
-                        const offsetDir = attempts % 4;
-                        const offsetAmount = 25 * (Math.floor(attempts / 4) + 1);
-                        if (offsetDir === 0) finalLabelY -= offsetAmount;
-                        else if (offsetDir === 1) finalLabelY += offsetAmount;
-                        else if (offsetDir === 2) finalLabelX -= offsetAmount;
-                        else finalLabelX += offsetAmount;
-                        attempts++;
+                        usedLabelPositions.push({
+                            x: finalLabelX,
+                            y: finalLabelY,
+                            width: labelWidth,
+                            height: labelHeight
+                        });
+
+                        const isConnection = connTypeLower === 'connection' || connTypeLower === 'connect';
+                        const typeIndicator = isFlow ? '→ ' : (isInterface ? '⟨⟩ ' : (isBinding ? '≡ ' : (isConnection ? '⊞ ' : '')));
+
+                        pendingLabels.push({
+                            x: finalLabelX,
+                            y: finalLabelY,
+                            width: labelWidth,
+                            height: labelHeight,
+                            text: typeIndicator + displayLabel,
+                            strokeColor: strokeColor
+                        });
                     }
 
-                    // Record this label position
-                    usedLabelPositions.push({ x: finalLabelX, y: finalLabelY, width: labelWidth, height: labelHeight, strokeColor: strokeColor });
+                    // Add flow item type annotation for flows
+                    if (isFlow && connector.itemType) {
+                        pendingLabels.push({
+                            x: labelX,
+                            y: labelY - 28,
+                            width: connector.itemType.length * 7 + 10,
+                            height: 16,
+                            text: '«' + connector.itemType + '»',
+                            strokeColor: 'var(--vscode-charts-green)',
+                            isItemType: true
+                        });
+                    }
+                });
 
-                    // Connector type indicator (SysML v2 stereotype)
-                    let typeIndicator = '';
-                    if (isFlow) typeIndicator = '⟶ ';
-                    else if (isInterface) typeIndicator = '◇ ';
-                    else if (isBinding) typeIndicator = '≡ ';
+                // Render labels on top
+                const labelGroup = g.append('g').attr('class', 'ibd-connector-labels');
+                pendingLabels.forEach(labelData => {
+                    if (labelData.isItemType) {
+                        labelGroup.append('text')
+                            .attr('x', labelData.x)
+                            .attr('y', labelData.y)
+                            .attr('text-anchor', 'middle')
+                            .text(labelData.text)
+                            .style('font-size', '9px')
+                            .style('font-style', 'italic')
+                            .style('fill', labelData.strokeColor);
+                    } else {
+                        labelGroup.append('rect')
+                            .attr('x', labelData.x - labelData.width / 2)
+                            .attr('y', labelData.y - labelData.height / 2)
+                            .attr('width', labelData.width)
+                            .attr('height', labelData.height)
+                            .attr('rx', 4)
+                            .style('fill', 'var(--vscode-editor-background)')
+                            .style('stroke', labelData.strokeColor)
+                            .style('stroke-width', '1px');
 
-                    // Collect label data for deferred rendering (after parts)
-                    pendingLabels.push({
-                        x: finalLabelX,
-                        y: finalLabelY,
-                        width: labelWidth,
-                        height: labelHeight,
-                        text: typeIndicator + displayLabel,
-                        strokeColor: strokeColor
-                    });
-                }
+                        labelGroup.append('text')
+                            .attr('x', labelData.x)
+                            .attr('y', labelData.y + 4)
+                            .attr('text-anchor', 'middle')
+                            .text(labelData.text)
+                            .style('font-size', '10px')
+                            .style('font-weight', '600')
+                            .style('fill', labelData.strokeColor);
+                    }
+                });
+            }
 
-                // Add flow item type annotation for flows (SysML v2: «item» stereotype)
-                if (isFlow && connector.itemType) {
-                    pendingLabels.push({
-                        x: labelX,
-                        y: labelY - 28,
-                        width: connector.itemType.length * 7 + 10,
-                        height: 16,
-                        text: '«' + connector.itemType + '»',
-                        strokeColor: 'var(--vscode-charts-green)',
-                        isItemType: true
-                    });
-                }
-            });
+            // Initial connector drawing
+            drawIbdConnectors();
 
             // Draw parts
             const partGroup = g.append('g').attr('class', 'ibd-parts');
@@ -10454,42 +10471,26 @@ export class VisualizationPanel {
                     event.stopPropagation();
                     startInlineEdit(d3.select(this), part.name, pos.x, pos.y, partWidth);
                 });
-            });
 
-            // Render connector labels LAST (on top of everything)
-            const labelGroup = g.append('g').attr('class', 'ibd-connector-labels');
-            pendingLabels.forEach(labelData => {
-                if (labelData.isItemType) {
-                    // Item type label (no background)
-                    labelGroup.append('text')
-                        .attr('x', labelData.x)
-                        .attr('y', labelData.y)
-                        .attr('text-anchor', 'middle')
-                        .text(labelData.text)
-                        .style('font-size', '9px')
-                        .style('font-style', 'italic')
-                        .style('fill', labelData.strokeColor);
-                } else {
-                    // Standard connector label with background
-                    labelGroup.append('rect')
-                        .attr('x', labelData.x - labelData.width / 2)
-                        .attr('y', labelData.y - labelData.height / 2)
-                        .attr('width', labelData.width)
-                        .attr('height', labelData.height)
-                        .attr('rx', 4)
-                        .style('fill', 'var(--vscode-editor-background)')
-                        .style('stroke', labelData.strokeColor)
-                        .style('stroke-width', '1px');
-
-                    labelGroup.append('text')
-                        .attr('x', labelData.x)
-                        .attr('y', labelData.y + 4)
-                        .attr('text-anchor', 'middle')
-                        .text(labelData.text)
-                        .style('font-size', '10px')
-                        .style('font-weight', '600')
-                        .style('fill', labelData.strokeColor);
-                }
+                // Add drag behavior for interactive node positioning
+                partG.style('cursor', 'grab');
+                const ibdDrag = d3.drag()
+                    .on('start', function(event) {
+                        d3.select(this).raise().style('cursor', 'grabbing');
+                        event.sourceEvent.stopPropagation();
+                    })
+                    .on('drag', function(event) {
+                        // Update position in the Map
+                        pos.x += event.dx;
+                        pos.y += event.dy;
+                        d3.select(this).attr('transform', 'translate(' + pos.x + ',' + pos.y + ')');
+                        // Redraw connectors with updated positions
+                        drawIbdConnectors();
+                    })
+                    .on('end', function(event) {
+                        d3.select(this).style('cursor', 'grab');
+                    });
+                partG.call(ibdDrag);
             });
         }
 
