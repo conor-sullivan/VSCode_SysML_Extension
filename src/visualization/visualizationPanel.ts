@@ -4594,6 +4594,9 @@ export class VisualizationPanel {
             // Clear any existing resize timeout to avoid conflicts
             clearTimeout(resizeTimeout);
 
+            // Reset manual zoom flag so the new view auto-fits
+            window.userHasManuallyZoomed = false;
+
             const proceedWithRender = () => {
                 currentView = view;
 
@@ -5182,6 +5185,20 @@ export class VisualizationPanel {
 
                     // Clear IBD connector highlights
                     g.selectAll('.ibd-connector').each(function() {
+                        const el = d3.select(this);
+                        const origStroke = el.attr('data-original-stroke');
+                        const origWidth = el.attr('data-original-width');
+                        if (origStroke) {
+                            el.style('stroke', origStroke)
+                              .style('stroke-width', origWidth)
+                              .classed('connector-highlighted', false);
+                            el.attr('data-original-stroke', null)
+                              .attr('data-original-width', null);
+                        }
+                    });
+
+                    // Clear General View connector highlights
+                    g.selectAll('.general-connector').each(function() {
                         const el = d3.select(this);
                         const origStroke = el.attr('data-original-stroke');
                         const origWidth = el.attr('data-original-width');
@@ -8334,15 +8351,78 @@ export class VisualizationPanel {
                         strokeWidth = '1.5px';
                     }
 
-                    edgeGroup.append('path')
+                    // Create the relationship edge path with highlighting capability
+                    var edgePath = edgeGroup.append('path')
                         .attr('d', pathD)
-                        .attr('class', 'relationship-edge')
+                        .attr('class', 'relationship-edge general-connector')
+                        .attr('data-connector-id', 'rel-' + conn.source + '-' + conn.target)
+                        .attr('data-source', conn.source)
+                        .attr('data-target', conn.target)
+                        .attr('data-type', conn.type || 'relates')
                         .style('fill', 'none')
                         .style('stroke', strokeColor)
                         .style('stroke-width', strokeWidth)
                         .style('stroke-dasharray', strokeDash)
                         .style('opacity', 0.85)
-                        .style('marker-end', markerEnd);
+                        .style('marker-end', markerEnd)
+                        .style('cursor', 'pointer');
+
+                    // Store original styles for unhighlighting
+                    var origStroke = strokeColor;
+                    var origWidth = strokeWidth;
+
+                    // Click handler to highlight connector end-to-end
+                    edgePath.on('click', function(event) {
+                        event.stopPropagation();
+
+                        // Clear any previous general connector highlights
+                        d3.selectAll('.general-connector').each(function() {
+                            var el = d3.select(this);
+                            var os = el.attr('data-original-stroke');
+                            var ow = el.attr('data-original-width');
+                            if (os) {
+                                el.style('stroke', os)
+                                  .style('stroke-width', ow)
+                                  .classed('connector-highlighted', false);
+                                el.attr('data-original-stroke', null)
+                                  .attr('data-original-width', null);
+                            }
+                        });
+
+                        // Highlight this connector
+                        var self = d3.select(this);
+                        self.attr('data-original-stroke', origStroke)
+                            .attr('data-original-width', origWidth)
+                            .style('stroke', '#FFD700')
+                            .style('stroke-width', '4px')
+                            .classed('connector-highlighted', true);
+
+                        // Bring to front
+                        this.parentNode.appendChild(this);
+
+                        // Post message for potential navigation/info
+                        vscode.postMessage({
+                            command: 'connectorSelected',
+                            source: conn.source,
+                            target: conn.target,
+                            type: conn.type
+                        });
+                    });
+
+                    // Hover effect
+                    edgePath.on('mouseenter', function() {
+                        var self = d3.select(this);
+                        if (!self.classed('connector-highlighted')) {
+                            self.style('stroke-width', '3px');
+                        }
+                    });
+
+                    edgePath.on('mouseleave', function() {
+                        var self = d3.select(this);
+                        if (!self.classed('connector-highlighted')) {
+                            self.style('stroke-width', origWidth);
+                        }
+                    });
 
                     // Add label at midpoint with SysML v2 notation
                     if (conn.type) {
@@ -8473,17 +8553,80 @@ export class VisualizationPanel {
                     var strokeColor = isBind ? '#569CD6' : '#D7BA7D'; // Blue for bind, Gold for connect
                     var strokeDash = isBind ? '4,2' : 'none'; // Dashed for bind, solid for connect
 
-                    // Draw the port connection edge
-                    edgeGroup.append('path')
+                    // Draw the port connection edge with highlighting capability
+                    var portEdge = edgeGroup.append('path')
                         .attr('d', pathD)
-                        .attr('class', 'port-connection-edge')
+                        .attr('class', 'port-connection-edge general-connector')
+                        .attr('data-connector-id', 'port-' + pConn.fromPort + '-' + pConn.toPort)
+                        .attr('data-source', pConn.fromFull || pConn.fromPort)
+                        .attr('data-target', pConn.toFull || pConn.toPort)
+                        .attr('data-type', pConn.type || 'connect')
                         .style('fill', 'none')
                         .style('stroke', strokeColor)
                         .style('stroke-width', '2px')
                         .style('stroke-dasharray', strokeDash)
                         .style('opacity', 0.9)
                         .style('marker-end', 'url(#general-connect)')
-                        .style('marker-start', 'url(#general-connect)');
+                        .style('marker-start', 'url(#general-connect)')
+                        .style('cursor', 'pointer');
+
+                    // Store original styles for unhighlighting
+                    var portOrigStroke = strokeColor;
+                    var portOrigWidth = '2px';
+
+                    // Click handler to highlight connector
+                    portEdge.on('click', function(event) {
+                        event.stopPropagation();
+
+                        // Clear any previous general connector highlights
+                        d3.selectAll('.general-connector').each(function() {
+                            var el = d3.select(this);
+                            var os = el.attr('data-original-stroke');
+                            var ow = el.attr('data-original-width');
+                            if (os) {
+                                el.style('stroke', os)
+                                  .style('stroke-width', ow)
+                                  .classed('connector-highlighted', false);
+                                el.attr('data-original-stroke', null)
+                                  .attr('data-original-width', null);
+                            }
+                        });
+
+                        // Highlight this connector
+                        var self = d3.select(this);
+                        self.attr('data-original-stroke', portOrigStroke)
+                            .attr('data-original-width', portOrigWidth)
+                            .style('stroke', '#FFD700')
+                            .style('stroke-width', '4px')
+                            .classed('connector-highlighted', true);
+
+                        // Bring to front
+                        this.parentNode.appendChild(this);
+
+                        // Post message for potential navigation/info
+                        vscode.postMessage({
+                            command: 'connectorSelected',
+                            source: pConn.fromFull || pConn.fromPort,
+                            target: pConn.toFull || pConn.toPort,
+                            type: pConn.type,
+                            name: pConn.name
+                        });
+                    });
+
+                    // Hover effect
+                    portEdge.on('mouseenter', function() {
+                        var self = d3.select(this);
+                        if (!self.classed('connector-highlighted')) {
+                            self.style('stroke-width', '3px');
+                        }
+                    });
+
+                    portEdge.on('mouseleave', function() {
+                        var self = d3.select(this);
+                        if (!self.classed('connector-highlighted')) {
+                            self.style('stroke-width', portOrigWidth);
+                        }
+                    });
 
                     // Add connection label if named
                     if (pConn.name) {
