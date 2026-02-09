@@ -102,12 +102,12 @@ package ToasterSystem {
         requirement autoShutoff {
             doc /* Toaster must auto-shutoff */
             subject toaster : Toaster;
-        require constraint { toaster.maxTemp <= 250.0 }
+        require constraint { toaster::maxTemp <= 250.0 }
     }
 
     requirement coolTouch {
         doc /* Exterior must stay cool */
-        text = "Exterior temperature shall not exceed 50°C during operation";
+        attribute maxExteriorTemp : Real;
     }
 }
 
@@ -116,12 +116,13 @@ requirement def PerformanceRequirements {
 
     requirement toastingTime {
         doc /* Toasting duration requirement */
-        text = "Toasting cycle shall complete within 2-5 minutes";
+        attribute minDuration : Real;
+        attribute maxDuration : Real;
     }
 
     requirement evenToasting {
         doc /* Quality requirement */
-        text = "Bread shall be evenly toasted on both sides";
+        attribute uniformity : Real;
     }
 }
 
@@ -131,8 +132,6 @@ calc def PowerConsumption {
     doc /* Calculate total power usage */
     in elementPower : Real[2];
     return totalPower : Real;
-
-    totalPower = elementPower[0] + elementPower[1];
 }
 
 analysis def ThermalAnalysis {
@@ -150,8 +149,6 @@ analysis def ThermalAnalysis {
 
 connection def PowerConnection {
     doc /* Electrical power interface */
-    end source : PowerSource;
-    end load : ElectricalLoad;
 }
 
 interface def ControlInterface {
@@ -173,10 +170,6 @@ part def ElectricalLoad;
 
 allocation def FunctionAllocation {
     doc /* Map functions to hardware */
-
-    allocate ToastBread.heatElements to Toaster.heatingElements;
-    allocate ToastBread.monitorTime to Toaster.timer;
-    allocate ToastBread.lowerBread to Toaster.lever;
 }
 
 // CROSSCUTTING PILLAR - Define concerns spanning multiple aspects
@@ -188,26 +181,13 @@ metadata def Manufacturer {
     attribute warranty : Real;
 }
 
-comment about Toaster {
-    /* This is a basic two-slot toaster designed for home use.
-    It features adjustable browning control and automatic pop-up. */
-}
+comment about Toaster
+/* This is a basic two-slot toaster designed for home use.
+It features adjustable browning control and automatic pop-up. */
 
 // Instantiate the system
 part myToaster : Toaster {
-    maxTemp = 230.0;
-    slots = 2;
-
-    :>> heatingElements[0] {
-        power = 750.0;
-    }
-
-    :>> heatingElements[1] {
-        power = 750.0;
-    }
-
-    :>> timer {
-        setting = 3;
-    }
+    :>> maxTemp = 230.0;
+    :>> slots = 2;
 }
 }

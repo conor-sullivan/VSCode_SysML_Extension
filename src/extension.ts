@@ -452,15 +452,22 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     const activeEditor = vscode.window.activeTextEditor;
+    outputChannel.appendLine(`Active editor on activation: ${activeEditor ? activeEditor.document.fileName : 'none'}`);
+    outputChannel.appendLine(`Language ID: ${activeEditor?.document.languageId ?? 'N/A'}`);
     if (activeEditor && activeEditor.document.languageId === 'sysml') {
+        outputChannel.appendLine('Setting sysml.modelLoaded context to true (activation)');
         vscode.commands.executeCommand('setContext', 'sysml.modelLoaded', true);
+        outputChannel.appendLine('Calling modelExplorerProvider.loadDocument (activation)');
         modelExplorerProvider.loadDocument(activeEditor.document);
     }
 
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(editor => {
+            outputChannel.appendLine(`onDidChangeActiveTextEditor: ${editor ? editor.document.fileName : 'none'} (lang: ${editor?.document.languageId ?? 'N/A'})`);
             if (editor && editor.document.languageId === 'sysml') {
+                outputChannel.appendLine('Setting sysml.modelLoaded context to true (editor change)');
                 vscode.commands.executeCommand('setContext', 'sysml.modelLoaded', true);
+                outputChannel.appendLine('Calling modelExplorerProvider.loadDocument (editor change)');
                 modelExplorerProvider.loadDocument(editor.document);
 
                 if (vscode.workspace.getConfiguration('sysml').get('validation.enabled')) {

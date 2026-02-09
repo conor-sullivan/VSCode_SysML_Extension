@@ -73,7 +73,7 @@ export function getSysMLKeywordIndex(): SysMLKeywordIndex {
     // Token types begin at 1; stop when literal name becomes undefined for a stretch.
     // Using a generous upper bound keeps this resilient to grammar changes.
     for (let tokenType = 1; tokenType <= 2000; tokenType++) {
-        const literal = SysMLv2Lexer.VOCABULARY.getLiteralName(tokenType);
+        const literal = SysMLv2Lexer.literalNames[tokenType];
         if (!literal) {
             continue;
         }

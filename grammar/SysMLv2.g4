@@ -1,7 +1,7 @@
 /*
- * SysML v2.0 ANTLR Grammar
- * Based on OMG Systems Modeling Language (SysML) version 2.0 specification
- * Compatible with ANTLR 4.x
+ * SysML v2.0 ANTLR4 Parser Grammar
+ * AUTO-GENERATED from official SysML v2 specification BNF
+ * Do not edit manually — run: python scripts/grammar/generate_grammar.py
  */
 
 parser grammar SysMLv2;
@@ -10,992 +10,2303 @@ options {
     tokenVocab = SysMLv2Lexer;
 }
 
-// Parser Rules
+// ===== Expression rules (precedence-climbing) =====
 
-// Root rule
-model
-    : element* EOF
+ownedExpression
+    : IF ownedExpression QUESTION ownedExpression ELSE ownedExpression
+    | ownedExpression QUESTION_QUESTION ownedExpression
+    | ownedExpression IMPLIES ownedExpression
+    | ownedExpression OR ownedExpression
+    | ownedExpression AND ownedExpression
+    | ownedExpression XOR ownedExpression
+    | ownedExpression PIPE ownedExpression
+    | ownedExpression AMP ownedExpression
+    | ownedExpression ( EQ_EQ | BANG_EQ | EQ_EQ_EQ | BANG_EQ_EQ ) ownedExpression
+    | ownedExpression ( LT | GT | LE | GE ) ownedExpression
+    | ownedExpression DOT_DOT ownedExpression
+    | ownedExpression ( PLUS | MINUS ) ownedExpression
+    | ownedExpression ( STAR | SLASH | PERCENT ) ownedExpression
+    | <assoc=right> ownedExpression ( STAR_STAR | CARET ) ownedExpression
+    | ( PLUS | MINUS | TILDE | NOT ) ownedExpression
+    | ( AT_SIGN | AT_AT ) typeReference
+    | ownedExpression ( ISTYPE | HASTYPE | AT_SIGN ) typeReference
+    | ownedExpression AS typeReference
+    | ownedExpression AT_AT typeReference
+    | ownedExpression META typeReference
+    | ownedExpression LBRACK sequenceExpressionList? RBRACK
+    | ownedExpression HASH LPAREN sequenceExpressionList? RPAREN
+    | ownedExpression argumentList
+    | ownedExpression DOT qualifiedName
+    | ownedExpression DOT_QUESTION bodyExpression
+    | ownedExpression ARROW qualifiedName ( bodyExpression | argumentList )
+    | ALL typeReference
+    | baseExpression
     ;
 
-element
-    : importStatement
-    | individualDefinition
-    | individualUsage
-    | packageElement
-    | definition
-    | partDefinition
-    | partUsage
-    | actionDefinition
-    | actionUsage
-    | stateDefinition
-    | stateUsage
-    | requirementDefinition
-    | requirementUsage
-    | useCaseDefinition
-    | useCaseUsage
-    | constraintDefinition
-    | constraintUsage
-    | attributeDefinition
-    | attributeUsage
-    | portDefinition
-    | portUsage
-    | connectionDefinition
-    | connectionUsage
-    | interfaceDefinition
-    | interfaceUsage
-    | allocationDefinition
-    | allocationUsage
-    | itemDefinition
-    | itemUsage
-    | actorDefinition
-    | actorUsage
-    | concernDefinition
-    | concernUsage
-    | analysisDefinition
-    | analysisUsage
-    | verificationDefinition
-    | verificationUsage
-    | viewDefinition
-    | viewUsage
-    | viewpointDefinition
-    | viewpointUsage
-    | enumerationDefinition
-    | enumerationUsage
-    | datatypeDefinition
-    | datatypeUsage
-    | associationDefinition
-    | associationUsage
-    | metadataDefinition
-    | metadataUsage
-    | metadataAnnotation
-    | comment
+typeReference
+    : qualifiedName
+    ;
+
+sequenceExpressionList
+    : ownedExpression ( COMMA ownedExpression )*
+    ;
+
+baseExpression
+    : nullExpression
+    | literalExpression
+    | featureReferenceExpression
+    | metadataAccessExpression
+    | invocationExpression
+    | constructorExpression
+    | bodyExpression
+    | LPAREN sequenceExpressionList? RPAREN
+    ;
+
+nullExpression
+    : NULL
+    | LPAREN RPAREN
+    ;
+
+featureReferenceExpression
+    : qualifiedName
+    ;
+
+metadataAccessExpression
+    : qualifiedName DOT METADATA
+    ;
+
+invocationExpression
+    : qualifiedName argumentList
+    ;
+
+constructorExpression
+    : NEW qualifiedName argumentList
+    ;
+
+bodyExpression
+    : LBRACE functionBodyPart RBRACE
+    ;
+
+argumentList
+    : LPAREN ( positionalArgumentList | namedArgumentList )? RPAREN
+    ;
+
+positionalArgumentList
+    : ownedExpression ( COMMA ownedExpression )*
+    ;
+
+namedArgumentList
+    : namedArgument ( COMMA namedArgument )*
+    ;
+
+namedArgument
+    : qualifiedName EQ ownedExpression
+    ;
+
+literalExpression
+    : literalBoolean
+    | literalString
+    | literalInteger
+    | literalReal
+    | literalInfinity
+    ;
+
+literalBoolean : TRUE | FALSE ;
+literalString : DOUBLE_STRING ;
+literalInteger : INTEGER ;
+literalReal : REAL ;
+literalInfinity : STAR ;
+
+argumentMember
+    : ownedExpression
+    ;
+
+argumentExpressionMember
+    : ownedExpression
+    ;
+
+
+// ===== Name rule (Identifier or UnrestrictedName) =====
+
+name
+    : IDENTIFIER
+    | STRING
+    ;
+
+// ===== Parser rules =====
+
+identification
+    : ( LT name GT )? ( name )?
+    ;
+
+relationshipBody
+    : SEMI
+    | LBRACE relationshipOwnedElement* RBRACE
+    | LBRACE ( ownedAnnotation )* RBRACE
+    ;
+
+relationshipOwnedElement
+    : ownedRelatedElement
+    | ownedAnnotation
+    ;
+
+ownedRelatedElement
+    : nonFeatureElement
+    | featureElement
+    ;
+
+dependency
+    : ( prefixMetadataAnnotation )* DEPENDENCY ( identification? FROM )? qualifiedName ( COMMA qualifiedName )* TO qualifiedName ( COMMA qualifiedName )* relationshipBody
+    | ( prefixMetadataAnnotation )* DEPENDENCY dependencyDeclaration relationshipBody
+    ;
+
+annotation
+    : qualifiedName
+    ;
+
+ownedAnnotation
+    : annotatingElement
+    ;
+
+annotatingElement
+    : comment
     | documentation
-    | calculation
-    | calcUsage
-    | interactionDefinition
-    | interactionUsage
-    | participantUsage
-    | messageUsage
-    | payloadUsage
-    | occurrenceUsage
-    | alternativeUsage
-    | elseUsage
-    | featureDefinition
-    | featureUsage
-    | definition
-    | functionDefinition
-    | eventDefinition
-    | eventUsage
-    | performAction
-    | exhibitState
-    | entryAction
-    | exitAction
-    | doAction
-    | acceptEvent
-    | sendAction
-    | stateTransition
-    | subjectUsage
-    | objectiveUsage
-    | stakeholderUsage
-    | allocateStatement
-    | endFeature
-    | redefinitionUsage
-    | flowProperty
-    | bindUsage
-    | connectStatement
-    | aliasStatement
-    | satisfyStatement
-    | dependencyStatement
-    | firstStatement
-    | thenStatement
-    | returnStatement
-    | requireStatement
-    | verifyStatement
-    | timesliceUsage
-    | snapshotUsage
-    | filterStatement
-    | forkUsage
-    | joinUsage
+    | textualRepresentation
+    | metadataFeature
     ;
 
-// Alias statement: alias name for qualified::name;
-aliasStatement
-    : ALIAS identifier FOR qualifiedName ';'?
-    ;
-
-// Satisfy statement: satisfy requirement by element { ... } or satisfy requirement name : Type;
-satisfyStatement
-    : SATISFY qualifiedName BY qualifiedName (body | ';')?
-    | SATISFY REQUIREMENT identifier typing? ';'
-    ;
-
-// Dependency statement: dependency from x to y; or #refinement dependency name to target;
-dependencyStatement
-    : DEPENDENCY FROM qualifiedName TO qualifiedName ';'?
-    | metadataPrefix DEPENDENCY identifier TO qualifiedName ';'?
-    ;
-
-// Filter statement: filter @ MetadataType; or filter @ Type and Type::property;
-filterStatement
-    : FILTER filterExpression ';'?
-    ;
-
-filterExpression
-    : filterTerm (('and' | 'or') filterTerm)*
-    ;
-
-filterTerm
-    : '@' qualifiedName
-    | qualifiedName
-    ;
-
-// First statement: first x then y; or just first x;
-firstStatement
-    : FIRST qualifiedName (THEN qualifiedName)? ';'?
-    ;
-
-// Then statement (succession continuation): then event x.y; or then action name { ... }
-thenStatement
-    : THEN 'event' qualifiedName ';'
-    | THEN ACTION identifier ACCEPT identifier typing? ';'
-    | THEN ACTION identifier multiplicity? (body | ';')
-    | THEN FORK identifier ';'
-    | THEN JOIN identifier ';'
-    | THEN qualifiedName ';'
-    ;
-
-// Return statement: return name :> Type = expression;
-// Also supports: return attribute name :> Type = expression;
-// Also supports: return part name :> Type;
-// Also supports: return :>> verdict = expression;
-returnStatement
-    : RETURN (ATTRIBUTE | PART)? identifier? typing? (COLONGT qualifiedName)? valueBinding? ';'
-    | RETURN COLONGTGT identifier valueBinding? ';'
-    ;
-
-// Require statement: require qualifiedName; or require constraint name { ... } or require constraint name;
-requireStatement
-    : REQUIRE qualifiedName ';'
-    | REQUIRE CONSTRAINT identifier? typing? (body | ';')
-    ;
-
-// Fork and Join usages for control flow
-forkUsage
-    : FORK identifier ';'
-    | FORK identifier (body | ';')
-    ;
-
-joinUsage
-    : JOIN identifier ';'
-    ;
-
-// End feature for connection ends: end name : qualified.reference;
-// or end #metadata name; or end #original ::> qualifiedName;
-endFeature
-    : END metadataPrefix? identifier? typing? ';'?
-    | END metadataPrefix? (COLONCOLONGT | COLONGTGT) qualifiedName ';'?
-    ;
-
-// Metadata prefix for short-form: #logical, #physical
-metadataPrefix
-    : HASH identifier
-    ;
-
-// Bind usage: bind sourceRef = targetRef;
-bindUsage
-    : BIND qualifiedName '=' qualifiedName ';'?
-    ;
-
-// Connect statement (inline): connect sourceRef to targetRef;
-// Also supports ::> binding: connect [1] name ::> path.to.port to [1] name ::> path.to.port
-connectStatement
-    : CONNECT multiplicity? identifier (COLONCOLONGT qualifiedName)? TO multiplicity? identifier (COLONCOLONGT qualifiedName)? (body | ';')?
-    | CONNECT multiplicity? qualifiedName TO multiplicity? qualifiedName ';'?
-    ;
-
-// Redefinition usage: :>> name { ... } or :>> name = value; or :>> name = value meta Type;
-// Shorthand for 'redefines' - redefines a feature from supertype
-// Also supports :>> name [multiplicity] for feature redefinition with multiplicity
-// Also supports 'redefines' keyword directly: redefines requiredFuelEconomy = 10 [km / L];
-redefinitionUsage
-    : COLONGTGT qualifiedName multiplicity? (body | '=' expression metaTyping? ';' | ';')
-    | REDEFINES qualifiedName valueBinding? ';'
-    ;
-
-// Meta typing for metatype constraints: meta SysML::Usage
-metaTyping
-    : META qualifiedName
-    ;
-
-// Flow property declaration: flow property name : Type direction in/out/inout;
-flowProperty
-    : FLOW PROPERTY identifier typing? (DIRECTION direction)? ';'?
-    ;
-
-// Package Elements
-packageElement
-    : visibility? STANDARD? LIBRARY? PACKAGE identifier body?
-    ;
-
-// Import statement
-importStatement
-    : visibility? IMPORT qualifiedName ('::' (MULTIPLY | POWER))? (',' qualifiedName ('::' (MULTIPLY | POWER))?)* ';'?
-    | visibility? PRIVATE IMPORT qualifiedName ('::' (MULTIPLY | POWER))? (',' qualifiedName ('::' (MULTIPLY | POWER))?)* ';'?
-    ;
-
-// Part Definitions and Usages
-partDefinition
-    : visibility? modifier* 'part' 'def' identifier specialization? (body | ';')?
-    ;
-
-partUsage
-    : visibility? metadataPrefix? modifier* 'part' identifier? typing? specialization? multiplicity? (body | ';')?
-    ;
-
-// Action Definitions and Usages
-actionDefinition
-    : visibility? modifier* 'action' 'def' identifier specialization? (body | ';')?
-    ;
-
-actionUsage
-    : visibility? modifier* 'action' identifier typing? specialization? multiplicity? (body | ';')?
-    ;
-
-// Behavioral Constructs
-// perform action ref; or perform ref redefines parent; or perform action name { body }
-performAction
-    : PERFORM ACTION? qualifiedName multiplicity? specialization? (body | ';')?
-    | PERFORM qualifiedName REDEFINES qualifiedName ';'?
-    ;
-
-exhibitState
-    : EXHIBIT STATE qualifiedName typing? specialization? PARALLEL? (body | ';')?
-    ;
-
-// Entry action: entry; entry / action(); entry action name;
-entryAction
-    : ENTRY ';'? (THEN identifier ';'?)?      // entry; then off; (initial state)
-    | ENTRY DIVIDE expression ';'?            // entry / initializeSensors();
-    | ENTRY ACTION? qualifiedName? ';'?       // entry action name; or entry action;
-    ;
-
-// Exit action: exit; exit / action();
-exitAction
-    : EXIT ';'?                               // exit;
-    | EXIT DIVIDE expression ';'?             // exit / closeShutter();
-    | EXIT qualifiedName ';'?                 // exit name;
-    ;
-
-// Do action: do action; do / action();
-doAction
-    : DO DIVIDE expression ';'?               // do / continuousFocus();
-    | DO qualifiedName (body | ';')?
-    | DO body
-    ;
-
-acceptEvent
-    : ACCEPT qualifiedName (':' qualifiedName)? (VIA qualifiedName)? (IF expression)? ';'?
-    | ACCEPT (AT | WHEN) expression ';'?
-    ;
-
-sendAction
-    : SEND expression TO qualifiedName ';'?
-    | SEND expression VIA qualifiedName (body | ';')?
-    | SEND qualifiedName VIA qualifiedName (body | ';')?
-    ;
-
-// State Definitions and Usages
-stateDefinition
-    : visibility? modifier* 'state' 'def' identifier specialization? (body | ';')?
-    ;
-
-stateUsage
-    : visibility? modifier* 'state' identifier typing? specialization? multiplicity? modifier* (body | ';')?
-    ;
-
-// Event Definitions
-eventDefinition
-    : visibility? modifier* 'event' 'def' identifier specialization? (body | ';')?
-    ;
-
-// Event Usages - event occurrence declarations and references
-// Examples: event sendSensedSpeed.sourceEvent;
-//           event occurrence setSpeedReceived = vehicle_b.setSpeedPort.setSpeedReceived;
-eventUsage
-    : visibility? modifier* 'event' 'occurrence' identifier valueBinding? ';'
-    | visibility? modifier* 'event' qualifiedName ';'
-    ;
-
-// Requirement Definitions and Usages
-requirementDefinition
-    : visibility? modifier* 'requirement' 'def' identifier specialization? (body | ';')?
-    ;
-
-requirementUsage
-    : visibility? modifier* 'requirement' shortName? identifier typing? specialization? multiplicity? (body | ';')?
-    ;
-
-// Use Case Definitions and Usages
-useCaseDefinition
-    : visibility? modifier* 'use' 'case' 'def' identifier specialization? (body | ';')?
-    ;
-
-useCaseUsage
-    : visibility? modifier* 'use' 'case' identifier typing? specialization? multiplicity? (body | ';')?
-    ;
-
-// Constraint Definitions and Usages
-constraintDefinition
-    : visibility? modifier* 'constraint' 'def' identifier specialization? (body | ';')?
-    ;
-
-constraintUsage
-    : visibility? modifier* 'constraint' identifier? typing? specialization? multiplicity? (body | ';')?
-    ;
-
-// Attribute Definitions and Usages
-attributeDefinition
-    : visibility? modifier* 'attribute' 'def' identifier typing? specialization? (body | ';')?
-    ;
-
-attributeUsage
-    : visibility? metadataPrefix? modifier* 'attribute' identifier typing? specialization? multiplicity? valueBinding? (body | ';')?
-    ;
-
-// Value binding: = value or default value or := assignment
-valueBinding
-    : ASSIGN expression
-    | DEFAULT expression
-    | COLONASSIGN expression
-    ;
-
-// Port Definitions and Usages
-portDefinition
-    : visibility? modifier* 'port' 'def' identifier specialization? (body | ';')?
-    ;
-
-// Port usage supports both:
-// - port name : Type {...}
-// - port name :>> redefinedPort [n] {...}  (redefinition with multiplicity)
-// - port :>> name : Type {...}  (inline redefinition with typing)
-portUsage
-    : visibility? modifier* 'port' identifier (typing | COLONGTGT qualifiedName)? specialization? multiplicity? (body | ';')?
-    | visibility? modifier* 'port' COLONGTGT identifier typing? specialization? multiplicity? (body | ';')?
-    ;
-
-// Connection Definitions and Usages
-connectionDefinition
-    : visibility? modifier* 'connection' 'def' identifier specialization? (body | ';')?
-    ;
-
-connectionUsage
-    : visibility? modifier* metadataPrefix? 'connection' identifier? typing? specialization? multiplicity? (body | ';')?
-    ;
-
-// Interface Definitions and Usages
-interfaceDefinition
-    : visibility? modifier* 'interface' 'def' identifier specialization? (body | ';')?
-    ;
-
-interfaceUsage
-    : visibility? modifier* 'interface' identifier typing? specialization? multiplicity? (body | connectStatement | ';')?
-    ;
-
-// Allocation Definitions and Usages
-allocationDefinition
-    : visibility? modifier* 'allocation' 'def' identifier specialization? (body | ';')?
-    ;
-
-allocationUsage
-    : visibility? modifier* 'allocation' identifier typing? specialization? multiplicity? (allocationBody | body | ';')?
-    ;
-
-// Allocation body: can contain allocate statements or regular body elements
-allocationBody
-    : allocateStatement+
-    ;
-
-// Item Definitions and Usages
-itemDefinition
-    : visibility? modifier* 'item' 'def' identifier specialization? (body | ';')?
-    ;
-
-// Item usage supports:
-// - item name : Type {...}
-// - item :> supertype [n] : Type {...}  (anonymous with specialization, multiplicity, then typing)
-// - in item name : Type redefines parent; (directional with typing and redefines)
-// - ref item redefines name { }
-itemUsage
-    : visibility? modifier* direction? REF? 'item' identifier? (typing | COLONGTGT qualifiedName)? specialization? multiplicity? typing? valueBinding? (body | ';')?
-    ;
-
-// Generic definition for 'individual def' etc without specific element type
-definition
-    : visibility? modifier* DEF identifier specialization? (body | ';')?
-    ;
-
-// Individual definition (individual is a kind of occurrence def)
-individualDefinition
-    : visibility? INDIVIDUAL DEF identifier specialization? (body | ';')?
-    ;
-
-// Individual usage: individual name : Type { ... }
-individualUsage
-    : visibility? INDIVIDUAL identifier typing? (body | ';')?
-    ;
-
-// Timeslice: timeslice name { ... }
-timesliceUsage
-    : visibility? TIMESLICE identifier typing? (body | ';')?
-    ;
-
-// Snapshot: snapshot name : Type { ... }
-snapshotUsage
-    : visibility? SNAPSHOT identifier typing? valueBinding? (body | ';')?
-    ;
-
-// Actor Definitions and Usages
-actorDefinition
-    : visibility? modifier* 'actor' 'def' identifier specialization? (body | ';')?
-    ;
-
-actorUsage
-    : visibility? modifier* 'actor' identifier typing? specialization? multiplicity? valueBinding? (body | ';')?
-    ;
-
-// Concern Definitions and Usages
-concernDefinition
-    : visibility? modifier* 'concern' 'def' identifier specialization? (body | ';')?
-    ;
-
-concernUsage
-    : visibility? modifier* 'concern' identifier typing? specialization? multiplicity? (body | ';')?
-    ;
-
-// Analysis Definitions and Usages
-analysisDefinition
-    : visibility? modifier* 'analysis' 'def' identifier specialization? (body | ';')?
-    ;
-
-analysisUsage
-    : visibility? modifier* 'analysis' identifier typing? specialization? multiplicity? (body | ';')?
-    ;
-
-// Subject and Objective (used in analysis, requirements, etc.)
-subjectUsage
-    : visibility? SUBJECT identifier typing? specialization? multiplicity? (body | ';')?
-    ;
-
-objectiveUsage
-    : visibility? OBJECTIVE identifier? typing? specialization? multiplicity? (body | ';')?
-    ;
-
-// Stakeholder usage (used in requirements)
-stakeholderUsage
-    : visibility? STAKEHOLDER identifier typing? specialization? multiplicity? (body | ';')?
-    ;
-
-// Allocate statement (used in allocation definitions)
-// Can be simple: allocate X to Y;
-// Or with nested body: allocate X to Y { ... }
-allocateStatement
-    : ALLOCATE qualifiedName TO qualifiedName (allocateBody | ';'?)
-    ;
-
-// Allocate body for nested allocation statements
-allocateBody
-    : '{' allocateStatement* '}'
-    ;
-
-// Verification Definitions and Usages with verify statements
-verificationDefinition
-    : visibility? modifier* 'verification' 'def' identifier specialization? verificationBody?
-    ;
-
-verificationUsage
-    : visibility? modifier* 'verification' identifier typing? specialization? multiplicity? verificationBody?
-    ;
-
-// Verification body can contain verify statements
-verificationBody
-    : '{' verificationBodyElement* '}'
-    ;
-
-verificationBodyElement
-    : element
-    | verifyStatement
-    ;
-
-// Verify statement: verify requirement; or verify requirement { ... }
-verifyStatement
-    : VERIFY qualifiedName (body | ';')?
-    ;
-
-// View Definitions and Usages with expose, filter, satisfy
-viewDefinition
-    : visibility? modifier* 'view' 'def' identifier specialization? viewBody?
-    ;
-
-viewUsage
-    : visibility? modifier* 'view' identifier typing? specialization? multiplicity? viewBody?
-    ;
-
-// View body can contain expose, filter, satisfy statements
-viewBody
-    : '{' viewBodyElement* '}'
-    ;
-
-viewBodyElement
-    : element
-    | exposeStatement
-    | filterStatement
-    | satisfyStatement
-    ;
-
-// Expose statement: expose element1, element2; or expose Package::**;
-exposeStatement
-    : EXPOSE exposeTarget (',' exposeTarget)* ';'?
-    ;
-
-exposeTarget
-    : identifier (('::' | '.') identifier)* '::' '**'   // name::** for recursive
-    | identifier (('::' | '.') identifier)* '::' '*'    // name::* for all
-    | qualifiedName        // plain name
-    ;
-
-// Viewpoint Definitions and Usages
-viewpointDefinition
-    : visibility? modifier* 'viewpoint' 'def' identifier specialization? body?
-    ;
-
-viewpointUsage
-    : visibility? modifier* 'viewpoint' identifier typing? specialization? multiplicity? body?
-    ;
-
-// Enumeration Definitions and Usages
-enumerationDefinition
-    : visibility? modifier* 'enum' 'def' identifier specialization? body?
-    ;
-
-enumerationUsage
-    : visibility? modifier* 'enum' identifier typing? specialization? multiplicity? body?
-    ;
-
-// Datatype Definitions and Usages
-datatypeDefinition
-    : visibility? modifier* 'datatype' 'def' identifier specialization? body?
-    ;
-
-datatypeUsage
-    : visibility? modifier* 'datatype' identifier typing? specialization? multiplicity? body?
-    ;
-
-// Association Definitions and Usages
-associationDefinition
-    : visibility? modifier* 'assoc' 'def' identifier specialization? body?
-    ;
-
-associationUsage
-    : visibility? modifier* 'assoc' identifier typing? specialization? multiplicity? body?
-    ;
-
-// Metadata Definitions and Usages
-metadataDefinition
-    : visibility? modifier* 'metadata' 'def' ('<' identifier '>')? identifier specialization? body?
-    ;
-
-metadataUsage
-    : visibility? modifier* 'metadata' identifier typing? specialization? multiplicity? body?
-    ;
-
-// Metadata annotation: @ MetadataType { ... } or @ MetadataType about subject { ... } or @MetadataType;
-metadataAnnotation
-    : AT_SIGN qualifiedName (ABOUT qualifiedName)? (body | ';')?
-    ;
-
-// Documentation Elements
 comment
-    : visibility? COMMENT (ABOUT qualifiedName)? identifier? stringValue? body?
+    : ( COMMENT identification ( ABOUT annotation ( COMMA annotation )* )? )? ( LOCALE DOUBLE_STRING )? REGULAR_COMMENT
     ;
 
 documentation
-    : visibility? 'doc' identifier? stringValue body?
+    : DOC identification ( LOCALE DOUBLE_STRING )? REGULAR_COMMENT
     ;
 
-// Calculations
-calculation
-    : visibility? 'calc' 'def' identifier expression? body?
+textualRepresentation
+    : ( REP identification )? LANGUAGE DOUBLE_STRING REGULAR_COMMENT
     ;
 
-// Calc usage: calc :> evaluationFunction { ... }
-calcUsage
-    : visibility? 'calc' (COLONGT qualifiedName)? body?
+rootNamespace
+    : namespaceBodyElement*
+    | packageBodyElement*
     ;
 
-// Interaction Elements
-interactionDefinition
-    : visibility? modifier* 'interaction' 'def' identifier specialization? body?
+namespace
+    : ( prefixMetadataMember )* namespaceDeclaration namespaceBody
     ;
 
-interactionUsage
-    : visibility? modifier* 'interaction' identifier typing? specialization? multiplicity? body?
+namespaceDeclaration
+    : NAMESPACE identification
     ;
 
-participantUsage
-    : visibility? modifier* 'participant' identifier typing? specialization? multiplicity? body?
+namespaceBody
+    : SEMI
+    | LBRACE namespaceBodyElement* RBRACE
     ;
 
-messageUsage
-    : visibility? modifier* 'message' identifier OF qualifiedName ';'  // message sendSensedSpeed of SensedSpeed;
-    | visibility? modifier* 'message' identifier messagePattern body?
-    | visibility? modifier* 'message' identifier? OF qualifiedName typing? FROM qualifiedName TO qualifiedName ';'?
+namespaceBodyElement
+    : namespaceMember
+    | aliasMember
+    | importRule
     ;
 
-messagePattern
-    : ':' 'SendMessage' 'from' identifier 'to' identifier
-    | ':' identifier
+memberPrefix
+    : ( visibilityIndicator )?
     ;
 
-payloadUsage
-    : visibility? modifier* 'payload' identifier typing? specialization? multiplicity? body?
+visibilityIndicator
+    : PUBLIC
+    | PRIVATE
+    | PROTECTED
     ;
 
-occurrenceUsage
-    : visibility? modifier* 'occurrence' identifier typing? specialization? multiplicity? modifier* body?
+namespaceMember
+    : nonFeatureMember
+    | namespaceFeatureMember
     ;
 
-alternativeUsage
-    : visibility? modifier* 'alt' identifier body?
+nonFeatureMember
+    : memberPrefix memberElement
     ;
 
-elseUsage
-    : visibility? modifier* 'else' identifier? body?
+namespaceFeatureMember
+    : memberPrefix featureElement
     ;
 
-// Feature Definitions
-featureDefinition
-    : visibility? modifier* FEATURE identifier typing? specialization? multiplicity? (body | ';')?
-    | visibility? modifier* REF FEATURE? identifier typing? specialization? multiplicity? (body | ';')?
+aliasMember
+    : memberPrefix ALIAS ( LT name GT )? ( name )? FOR qualifiedName relationshipBody
     ;
 
-// Feature Usage - bare feature declarations inside bodies without keywords
-// Examples: distancePerVolume :> scalarQuantities = distance / volume;
-//           kpl : DerivedUnit = km / L;
-//           out wheelToRoadTorque redefines ... [n] = value;
-featureUsage
-    : direction? identifier typing? specialization? multiplicity? valueBinding? (body | ';')?
+qualifiedName
+    : ( DOLLAR COLON_COLON )? ( name COLON_COLON )* name
     ;
 
-// Function Definitions (for library functions)
-functionDefinition
-    : visibility? modifier* FUNCTION (identifier | stringValue) functionSignature? body?
+importRule
+    : ( visibilityIndicator )? IMPORT ( ALL )? importDeclaration relationshipBody
     ;
 
-functionSignature
-    : '(' parameterList? ')' returnType?
+importDeclaration
+    : membershipImport
+    | namespaceImport
     ;
 
-parameterList
-    : parameter (',' parameter)*
+membershipImport
+    : qualifiedName ( COLON_COLON STAR_STAR )?
     ;
 
-parameter
-    : visibility? direction? identifier typing? multiplicity? (body | ';')?
+namespaceImport
+    : qualifiedName COLON_COLON STAR ( COLON_COLON STAR_STAR )?
+    | filterPackage
     ;
 
-direction
+filterPackage
+    : filterPackageImportDeclaration ( filterPackageMember )+
+    | filterPackageImport ( filterPackageMember )+
+    ;
+
+filterPackageMember
+    : LBRACK ownedExpression RBRACK
+    ;
+
+memberElement
+    : annotatingElement
+    | nonFeatureElement
+    ;
+
+nonFeatureElement
+    : dependency
+    | namespace
+    | type
+    | classifier
+    | dataType
+    | class
+    | structure
+    | metaclass
+    | association
+    | associationStructure
+    | interaction
+    | behavior
+    | function
+    | predicate
+    | multiplicity
+    | package
+    | libraryPackage
+    | specialization
+    | conjugation
+    | subclassification
+    | disjoining
+    | featureInverting
+    | featureTyping
+    | subsetting
+    | redefinition
+    | typeFeaturing
+    ;
+
+featureElement
+    : feature
+    | step
+    | expression
+    | booleanExpression
+    | invariant
+    | connector
+    | bindingConnector
+    | succession
+    | flow
+    | successionFlow
+    ;
+
+type
+    : typePrefix TYPE typeDeclaration typeBody
+    ;
+
+typePrefix
+    : ( ABSTRACT )? ( prefixMetadataMember )*
+    ;
+
+typeDeclaration
+    : ( ALL )? identification ( ownedMultiplicity )? ( specializationPart | conjugationPart )+ typeRelationshipPart*
+    ;
+
+specializationPart
+    : ( COLON_GT | SPECIALIZES ) ownedSpecialization ( COMMA ownedSpecialization )*
+    ;
+
+conjugationPart
+    : ( TILDE | CONJUGATES ) ownedConjugation
+    ;
+
+typeRelationshipPart
+    : disjoiningPart
+    | unioningPart
+    | intersectingPart
+    | differencingPart
+    ;
+
+disjoiningPart
+    : DISJOINT FROM ownedDisjoining ( COMMA ownedDisjoining )*
+    ;
+
+unioningPart
+    : UNIONS unioning ( COMMA unioning )*
+    ;
+
+intersectingPart
+    : INTERSECTS intersecting ( COMMA intersecting )*
+    ;
+
+differencingPart
+    : DIFFERENCES differencing ( COMMA differencing )*
+    ;
+
+typeBody
+    : SEMI
+    | LBRACE typeBodyElement* RBRACE
+    ;
+
+typeBodyElement
+    : nonFeatureMember
+    | featureMember
+    | aliasMember
+    | importRule
+    ;
+
+specialization
+    : ( SPECIALIZATION identification )? SUBTYPE specificType ( COLON_GT | SPECIALIZES ) generalType relationshipBody
+    ;
+
+ownedSpecialization
+    : generalType
+    ;
+
+specificType
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+generalType
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+conjugation
+    : ( CONJUGATION identification )? CONJUGATE qualifiedName ( DOT qualifiedName )* ( TILDE | CONJUGATES ) qualifiedName ( DOT qualifiedName )* relationshipBody
+    ;
+
+ownedConjugation
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+disjoining
+    : ( DISJOINING identification )? DISJOINT qualifiedName ( DOT qualifiedName )* FROM qualifiedName ( DOT qualifiedName )* relationshipBody
+    ;
+
+ownedDisjoining
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+unioning
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+intersecting
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+differencing
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+featureMember
+    : typeFeatureMember
+    | ownedFeatureMember
+    ;
+
+typeFeatureMember
+    : memberPrefix MEMBER featureElement
+    ;
+
+ownedFeatureMember
+    : memberPrefix featureElement
+    ;
+
+classifier
+    : typePrefix CLASSIFIER classifierDeclaration typeBody
+    ;
+
+classifierDeclaration
+    : ( ALL )? identification ( ownedMultiplicity )? ( superclassingPart | conjugationPart )? typeRelationshipPart*
+    ;
+
+superclassingPart
+    : ( COLON_GT | SPECIALIZES ) ownedSubclassification ( COMMA ownedSubclassification )*
+    ;
+
+subclassification
+    : ( SPECIALIZATION identification )? SUBCLASSIFIER qualifiedName ( COLON_GT | SPECIALIZES ) qualifiedName relationshipBody
+    ;
+
+ownedSubclassification
+    : qualifiedName
+    ;
+
+feature
+    : ( featurePrefix ( FEATURE | prefixMetadataMember ) featureDeclaration? | ( endFeaturePrefix | basicFeaturePrefix ) featureDeclaration ) valuePart? typeBody
+    ;
+
+endFeaturePrefix
+    : ( CONST )? END
+    ;
+
+basicFeaturePrefix
+    : ( featureDirection )? ( DERIVED )? ( ABSTRACT )? ( COMPOSITE | PORTION )? ( VAR | CONST )?
+    ;
+
+featurePrefix
+    : ( endFeaturePrefix ( ownedCrossFeatureMember )? | basicFeaturePrefix ) ( prefixMetadataMember )*
+    ;
+
+ownedCrossFeatureMember
+    : ownedCrossFeature
+    ;
+
+ownedCrossFeature
+    : basicFeaturePrefix featureDeclaration
+    | basicUsagePrefix usageDeclaration
+    ;
+
+featureDirection
     : IN
     | OUT
     | INOUT
     ;
 
-returnType
-    : RETURN ':' qualifiedName
-    | '{' RETURN ':' qualifiedName multiplicity? ';'? '}'
+featureDeclaration
+    : ( ALL )? ( featureIdentification ( featureSpecializationPart | conjugationPart )? | featureSpecializationPart | conjugationPart ) featureRelationshipPart*
     ;
 
-// Common Elements
-visibility
-    : 'public'
-    | 'private'
-    | 'protected'
+featureIdentification
+    : LT name GT ( name )?
+    | name
     ;
 
-modifier
-    : 'abstract'
-    | 'derived'
-    | 'readonly'
-    | 'variation'
-    | 'ordered'
-    | 'nonunique'
-    | INDIVIDUAL
-    | SNAPSHOT
-    | TIMESLICE
+featureRelationshipPart
+    : typeRelationshipPart
+    | chainingPart
+    | invertingPart
+    | typeFeaturingPart
     ;
 
-typing
-    : ':' TILDE? qualifiedName typeParameters?   // TILDE prefix indicates conjugate port type, optional type parameters
+chainingPart
+    : CHAINS qualifiedName ( DOT qualifiedName )*
     ;
 
-// Type parameters for generics: Feature<T>, Collection<Int, Real>
-typeParameters
-    : LT typeParameterList GT
+invertingPart
+    : INVERSE OF ownedFeatureInverting
     ;
 
-typeParameterList
-    : qualifiedName (',' qualifiedName)*
+typeFeaturingPart
+    : FEATURED BY ownedTypeFeaturing ( COMMA ownedTypeFeaturing )*
     ;
 
-specialization
-    : ':>' qualifiedName (',' qualifiedName)*
-    | 'specializes' qualifiedName (',' qualifiedName)*
-    | 'subsets' qualifiedName (',' qualifiedName)*
-    | 'redefines' qualifiedName (',' qualifiedName)*
-    | 'references' qualifiedName (',' qualifiedName)*
-    | 'binds' qualifiedName (',' qualifiedName)*
+featureSpecializationPart
+    : featureSpecialization+ multiplicityPart? featureSpecialization*
+    | multiplicityPart featureSpecialization*
     ;
 
-multiplicity
-    : '[' multiplicityRange ']' multiplicityModifier*
+multiplicityPart
+    : ownedMultiplicity
+    | ( ownedMultiplicity )? ( ORDERED ( NONUNIQUE )? | NONUNIQUE ( ORDERED )? )
     ;
 
-// Multiplicity modifiers: ordered, nonunique
-multiplicityModifier
-    : ORDERED
-    | NONUNIQUE
+featureSpecialization
+    : typings
+    | subsettings
+    | references
+    | crosses
+    | redefinitions
     ;
 
-multiplicityRange
-    : multiplicityBound (DOTDOT multiplicityBound)?
+typings
+    : typedBy ( COMMA ownedFeatureTyping )*
+    | typedBy ( COMMA featureTyping )*
     ;
 
-multiplicityBound
-    : INTEGER
-    | '*'
-    | expression
+typedBy
+    : ( COLON | TYPED BY ) ownedFeatureTyping
+    | ( COLON | DEFINED BY ) featureTyping
     ;
 
-body
-    : '{' bodyElement* '}'
-    | '{' expression '}' // For constraint bodies: constraint {expr}
+subsettings
+    : subsets ( COMMA ownedSubsetting )*
     ;
 
-// Body elements include both regular elements and parameters
-bodyElement
-    : element
-    | parameter
-    | flowStatement
-    | enumValueBinding
+subsets
+    : ( COLON_GT | SUBSETS ) ownedSubsetting
     ;
 
-// Enum value binding: enum = value;
-enumValueBinding
-    : ENUM ('=' expression)? ';'?
+references
+    : ( COLON_COLON_GT | REFERENCES ) ownedReferenceSubsetting
     ;
 
-// Flow statement: flow of Type from source.port to target.port; OR flow from source to target; OR flow source to target;
-flowStatement
-    : FLOW OF? qualifiedName FROM qualifiedName TO qualifiedName ';'?
-    | FLOW FROM qualifiedName TO qualifiedName ';'?
-    | FLOW qualifiedName TO qualifiedName ';'?
+crosses
+    : ( FAT_ARROW | CROSSES ) ownedCrossSubsetting
+    ;
+
+redefinitions
+    : redefines ( COMMA ownedRedefinition )*
+    ;
+
+redefines
+    : ( COLON_GT_GT | REDEFINES ) ownedRedefinition
+    ;
+
+featureTyping
+    : ( SPECIALIZATION identification )? TYPING qualifiedName ( COLON | TYPED BY ) generalType relationshipBody
+    | ownedFeatureTyping
+    | conjugatedPortTyping
+    ;
+
+ownedFeatureTyping
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+subsetting
+    : ( SPECIALIZATION identification )? SUBSET specificType ( COLON_GT | SUBSETS ) generalType relationshipBody
+    ;
+
+ownedSubsetting
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+ownedReferenceSubsetting
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+ownedCrossSubsetting
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+redefinition
+    : ( SPECIALIZATION identification )? REDEFINITION specificType ( COLON_GT_GT | REDEFINES ) generalType relationshipBody
+    ;
+
+ownedRedefinition
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+ownedFeatureChain
+    : featureChain
+    | ownedFeatureChaining ( DOT ownedFeatureChaining )+
+    ;
+
+featureChain
+    : ownedFeatureChaining ( DOT ownedFeatureChaining )+
+    ;
+
+ownedFeatureChaining
+    : qualifiedName
+    ;
+
+featureInverting
+    : ( INVERTING identification? )? INVERSE qualifiedName ( DOT qualifiedName )* OF qualifiedName ( DOT qualifiedName )* relationshipBody
+    ;
+
+ownedFeatureInverting
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+typeFeaturing
+    : FEATURING ( identification OF )? qualifiedName BY qualifiedName relationshipBody
+    ;
+
+ownedTypeFeaturing
+    : qualifiedName
+    ;
+
+dataType
+    : typePrefix DATATYPE classifierDeclaration typeBody
+    ;
+
+class
+    : typePrefix CLASS classifierDeclaration typeBody
+    ;
+
+structure
+    : typePrefix STRUCT classifierDeclaration typeBody
+    ;
+
+association
+    : typePrefix ASSOC classifierDeclaration typeBody
+    ;
+
+associationStructure
+    : typePrefix ASSOC STRUCT classifierDeclaration typeBody
+    ;
+
+connector
+    : featurePrefix CONNECTOR ( featureDeclaration? valuePart? | connectorDeclaration ) typeBody
+    ;
+
+connectorDeclaration
+    : binaryConnectorDeclaration
+    | naryConnectorDeclaration
+    ;
+
+binaryConnectorDeclaration
+    : ( featureDeclaration? FROM | ALL FROM? )? connectorEndMember TO connectorEndMember
+    ;
+
+naryConnectorDeclaration
+    : featureDeclaration? LPAREN connectorEndMember COMMA connectorEndMember ( COMMA connectorEndMember )* RPAREN
+    ;
+
+connectorEndMember
+    : connectorEnd
+    ;
+
+connectorEnd
+    : ( ownedCrossMultiplicityMember )? ( name ( COLON_COLON_GT | REFERENCES ) )? ownedReferenceSubsetting
+    ;
+
+ownedCrossMultiplicityMember
+    : ownedCrossMultiplicity
+    ;
+
+ownedCrossMultiplicity
+    : ownedMultiplicity
+    ;
+
+bindingConnector
+    : featurePrefix BINDING bindingConnectorDeclaration typeBody
+    ;
+
+bindingConnectorDeclaration
+    : featureDeclaration ( OF connectorEndMember EQ connectorEndMember )?
+    | ( ALL )? ( OF? connectorEndMember EQ connectorEndMember )?
+    ;
+
+succession
+    : featurePrefix SUCCESSION successionDeclaration typeBody
+    ;
+
+successionDeclaration
+    : featureDeclaration ( FIRST connectorEndMember THEN connectorEndMember )?
+    | ( ALL )? ( FIRST? connectorEndMember THEN connectorEndMember )?
+    ;
+
+behavior
+    : typePrefix BEHAVIOR classifierDeclaration typeBody
+    ;
+
+step
+    : featurePrefix STEP featureDeclaration valuePart? typeBody
+    ;
+
+function
+    : typePrefix FUNCTION classifierDeclaration functionBody
+    ;
+
+functionBody
+    : SEMI
+    | LBRACE functionBodyPart RBRACE
+    ;
+
+functionBodyPart
+    : ( typeBodyElement | returnFeatureMember )* ( resultExpressionMember )?
+    ;
+
+returnFeatureMember
+    : memberPrefix RETURN featureElement
+    ;
+
+resultExpressionMember
+    : memberPrefix ownedExpression
+    | memberPrefix? ownedExpression
     ;
 
 expression
-    : conditionalExpression
+    : featurePrefix EXPR featureDeclaration valuePart? functionBody
     ;
 
-conditionalExpression
-    : nullCoalescingExpression ('?' expression ':' conditionalExpression)?
+predicate
+    : typePrefix PREDICATE classifierDeclaration functionBody
     ;
 
-nullCoalescingExpression
-    : logicalOrExpression ('??' logicalOrExpression)*
+booleanExpression
+    : featurePrefix BOOL featureDeclaration valuePart? functionBody
     ;
 
-logicalOrExpression
-    : logicalXorExpression ('or' logicalXorExpression)*
+invariant
+    : featurePrefix INV ( TRUE | FALSE )? featureDeclaration valuePart? functionBody
     ;
 
-logicalXorExpression
-    : logicalAndExpression (XOR logicalAndExpression)*
+ownedExpressionMember
+    : ownedExpression
     ;
 
-logicalAndExpression
-    : equalityExpression ('and' equalityExpression)*
+metadataReference
+    : elementReferenceMember
     ;
 
-equalityExpression
-    : relationalExpression ((EQ | NE | '===' | '!==') relationalExpression)*
+typeReferenceMember
+    : typeReference
     ;
 
-relationalExpression
-    : additiveExpression ((LT | GT | LE | GE | 'in' | 'hastype') additiveExpression)*
+typeResultMember
+    : typeReference
     ;
 
-additiveExpression
-    : multiplicativeExpression (('+' | '-') multiplicativeExpression)*
+referenceTyping
+    : qualifiedName
     ;
 
-multiplicativeExpression
-    : exponentialExpression (('*' | '/' | '%') exponentialExpression)*
+emptyResultMember
+    : emptyFeature
     ;
 
-exponentialExpression
-    : unaryExpression ('**' unaryExpression)*
+sequenceOperatorExpression
+    : ownedExpressionMember COMMA sequenceExpressionListMember
     ;
 
-unaryExpression
-    : ('+' | '-' | '!' | 'not') unaryExpression
-    | postfixExpression
+sequenceExpressionListMember
+    : sequenceExpressionList
     ;
 
-postfixExpression
-    : primaryExpression postfixOperator*
+bodyArgumentMember
+    : bodyArgument
     ;
 
-postfixOperator
-    : '.' identifier
-    | '[' expression ']'
-    | '(' argumentList? ')'
+bodyArgument
+    : bodyArgumentValue
     ;
 
-primaryExpression
-    : NEW qualifiedName '(' argumentList? ')'  // Constructor expression
-    | qualifiedName unitSuffix?                // qualified names like IgnitionOnOff::on
-    | literal unitSuffix?
-    | '(' expressionList ')' unitSuffix?       // grouped or tuple expression: (e) or (e, e, ...) with optional unit
+bodyArgumentValue
+    : bodyExpression
     ;
 
-// Expression list: for tuples and grouped expressions
-expressionList
-    : expression (',' expression)*
+functionReferenceArgumentMember
+    : functionReferenceArgument
     ;
 
-// Unit suffix for expressions: 500[W], 80[mm]
-unitSuffix
-    : UNIT_LITERAL
-    | '[' qualifiedName ']'
+functionReferenceArgument
+    : functionReferenceArgumentValue
     ;
 
-argumentList
-    : argument (',' argument)*
+functionReferenceArgumentValue
+    : functionReferenceExpression
     ;
 
-argument
-    : identifier '=' expression    // Named argument: name=value
-    | expression                   // Positional argument
+functionReferenceExpression
+    : functionReferenceMember
     ;
 
-literal
-    : INTEGER
-    | REAL
-    | stringValue
-    | booleanValue
-    | nullValue
+functionReferenceMember
+    : functionReference
     ;
 
-stringValue
-    : STRING
+functionReference
+    : referenceTyping
+    ;
+
+featureChainMember
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+ownedFeatureChainMember
+    : featureChain
+    | ownedFeatureChain
+    ;
+
+featureReferenceMember
+    : featureReference
+    ;
+
+featureReference
+    : qualifiedName
+    ;
+
+elementReferenceMember
+    : qualifiedName
+    ;
+
+constructorResultMember
+    : constructorResult
+    ;
+
+constructorResult
+    : argumentList
+    ;
+
+instantiatedTypeMember
+    : qualifiedName ( DOT qualifiedName )*
+    ;
+
+instantiatedTypeReference
+    : qualifiedName
+    ;
+
+namedArgumentMember
+    : namedArgument
+    ;
+
+parameterRedefinition
+    : qualifiedName
+    ;
+
+expressionBodyMember
+    : expressionBody
+    ;
+
+expressionBody
+    : LBRACE functionBodyPart RBRACE
     ;
 
 booleanValue
-    : 'true'
-    | 'false'
+    : TRUE
+    | FALSE
     ;
 
-nullValue
-    : 'null'
+realValue
+    : INTEGER? DOT ( INTEGER | REAL )
+    | REAL
     ;
 
-qualifiedName
-    : identifier (('::' | '.') identifier)*
+interaction
+    : typePrefix INTERACTION classifierDeclaration typeBody
     ;
 
-// Identifier rule allows keywords to be used as names in certain contexts
-// This is common in SysML where 'payload', 'flow', etc. might be feature names
-identifier
-    : IDENTIFIER
-    | STRING    // Quoted identifiers like 'Activate rocket booster'
-    | keyword   // Allow keywords as identifiers
+flow
+    : featurePrefix FLOW flowDeclaration typeBody
     ;
 
-// Short name (short ID) in angle brackets: <'1'> or <id>
-shortName
-    : '<' (STRING | IDENTIFIER) '>'
+successionFlow
+    : featurePrefix SUCCESSION FLOW flowDeclaration typeBody
     ;
 
-// Keywords that can also be used as identifiers
-// Note: PACKAGE, IMPORT, STANDARD, LIBRARY are excluded because they start element definitions
-keyword
-    : PAYLOAD
-    | FLOW
-    | DIRECTION
-    | PROPERTY
-    | STATE
-    | ACTION
-    | PORT
-    | PART
-    | ATTRIBUTE
-    | CONNECTION
-    | CONSTRAINT
-    | REQUIREMENT
-    | ITEM
-    | EVENT
-    | MESSAGE
-    | INTERFACE
-    | VIEW
-    | VIEWPOINT
-    | COMMENT
-    | DOC
-    | METADATA
-    | ALLOCATION
-    | ANALYSIS
-    | VERIFICATION
-    | CONCERN
-    | OCCURRENCE
-    | INTERACTION
-    | PARTICIPANT
-    | SUBJECT
-    | OBJECTIVE
-    | FEATURE
-    | FUNCTION
+flowDeclaration
+    : featureDeclaration valuePart? ( OF payloadFeatureMember )? ( FROM flowEndMember TO flowEndMember )?
+    | ( ALL )? flowEndMember TO flowEndMember
+    | usageDeclaration valuePart? ( OF flowPayloadFeatureMember )? ( FROM flowEndMember TO flowEndMember )?
+    | flowEndMember TO flowEndMember
     ;
 
-// State machine elements
-// Supports both:
-//   transition name first sourceState accept Event then targetState;
-//   transition name from sourceState to targetState when condition;
-stateTransition
-    : TRANSITION identifier? fromState transitionGuard? transitionEffect? toState ';'?
-    | TRANSITION identifier? fromState acceptEvent transitionGuard? transitionEffect? toState ';'?
-    | TRANSITION identifier? fromState doAction toState ';'?
-    | TRANSITION identifier? fromState toState transitionTrigger? ';'?
-    | acceptEvent transitionGuard? transitionEffect? THEN identifier ';'?  // accept ... if ... do ... then target
-    | transitionGuard transitionEffect? THEN identifier ';'?               // if ... do ... then target
+payloadFeatureMember
+    : payloadFeature
     ;
 
-fromState
-    : FIRST identifier              // first off
-    | FROM identifier               // from sourceState
-    | identifier                    // legacy: just identifier
+payloadFeature
+    : identification payloadFeatureSpecializationPart valuePart?
+    | identification valuePart
+    | ownedFeatureTyping ( ownedMultiplicity )?
+    | ownedMultiplicity ( ownedFeatureTyping )?
+    | identification? payloadFeatureSpecializationPart valuePart?
+    | ownedMultiplicity ownedFeatureTyping
     ;
 
-toState
-    : THEN identifier               // then initializing
-    | TO identifier                 // to targetState
+payloadFeatureSpecializationPart
+    : featureSpecialization+ multiplicityPart? featureSpecialization*
+    | multiplicityPart featureSpecialization+
+    | ( featureSpecialization )+ multiplicityPart? featureSpecialization*
     ;
 
-transitionTrigger
-    : acceptEvent
-    | AT expression
-    | WHEN expression
+flowEndMember
+    : flowEnd
     ;
 
-transitionGuard
-    : IF expression
+flowEnd
+    : qualifiedName ( DOT qualifiedName )*
     ;
 
-transitionEffect
-    : DO sendAction
-    | DO qualifiedName
+flowFeatureMember
+    : flowFeature
+    ;
+
+flowFeature
+    : flowFeatureRedefinition
+    ;
+
+flowFeatureRedefinition
+    : qualifiedName
+    ;
+
+valuePart
+    : featureValue
+    ;
+
+featureValue
+    : ( EQ | COLON_EQ | DEFAULT ( EQ | COLON_EQ )? ) ownedExpression
+    ;
+
+multiplicity
+    : multiplicitySubset
+    | multiplicityRange
+    ;
+
+multiplicitySubset
+    : MULTIPLICITY identification subsets typeBody
+    ;
+
+multiplicityRange
+    : MULTIPLICITY identification multiplicityBounds typeBody
+    | LBRACK ( multiplicityExpressionMember DOT_DOT )? multiplicityExpressionMember RBRACK
+    ;
+
+ownedMultiplicity
+    : ownedMultiplicityRange
+    | multiplicityRange
+    ;
+
+ownedMultiplicityRange
+    : multiplicityBounds
+    ;
+
+multiplicityBounds
+    : LBRACK ( multiplicityExpressionMember DOT_DOT )? multiplicityExpressionMember RBRACK
+    ;
+
+multiplicityExpressionMember
+    : ( literalExpression | featureReferenceExpression )
+    ;
+
+metaclass
+    : typePrefix METACLASS classifierDeclaration typeBody
+    ;
+
+prefixMetadataAnnotation
+    : HASH prefixMetadataFeature
+    | HASH prefixMetadataUsage
+    ;
+
+prefixMetadataMember
+    : HASH prefixMetadataFeature
+    | HASH prefixMetadataUsage
+    ;
+
+prefixMetadataFeature
+    : ownedFeatureTyping
+    ;
+
+metadataFeature
+    : ( prefixMetadataMember )* ( AT_SIGN | METADATA ) metadataFeatureDeclaration ( ABOUT annotation ( COMMA annotation )* )? metadataBody
+    ;
+
+metadataFeatureDeclaration
+    : ( identification ( COLON | TYPED BY ) )? ownedFeatureTyping
+    ;
+
+metadataBody
+    : SEMI
+    | LBRACE ( metadataBodyElement )* RBRACE
+    | LBRACE ( definitionMember | metadataBodyUsageMember | aliasMember | importRule )* RBRACE
+    ;
+
+metadataBodyElement
+    : nonFeatureMember
+    | metadataBodyFeatureMember
+    | aliasMember
+    | importRule
+    ;
+
+metadataBodyFeatureMember
+    : metadataBodyFeature
+    ;
+
+metadataBodyFeature
+    : FEATURE? ( COLON_GT_GT | REDEFINES )? ownedRedefinition featureSpecializationPart? valuePart? metadataBody
+    ;
+
+package
+    : ( prefixMetadataMember )* packageDeclaration packageBody
+    ;
+
+libraryPackage
+    : ( STANDARD )? LIBRARY ( prefixMetadataMember )* packageDeclaration packageBody
+    ;
+
+packageDeclaration
+    : PACKAGE identification
+    ;
+
+packageBody
+    : SEMI
+    | LBRACE ( namespaceBodyElement | elementFilterMember )* RBRACE
+    | LBRACE packageBodyElement* RBRACE
+    ;
+
+elementFilterMember
+    : memberPrefix FILTER ownedExpression SEMI
+    ;
+
+dependencyDeclaration
+    : ( identification FROM )? qualifiedName ( COMMA qualifiedName )* TO qualifiedName ( COMMA qualifiedName )*
+    ;
+
+annotatingMember
+    : annotatingElement
+    ;
+
+packageBodyElement
+    : packageMember
+    | elementFilterMember
+    | aliasMember
+    | importRule
+    ;
+
+packageMember
+    : memberPrefix ( definitionElement | usageElement )
+    ;
+
+definitionElement
+    : package
+    | libraryPackage
+    | annotatingElement
+    | dependency
+    | attributeDefinition
+    | enumerationDefinition
+    | occurrenceDefinition
+    | individualDefinition
+    | itemDefinition
+    | partDefinition
+    | connectionDefinition
+    | flowDefinition
+    | interfaceDefinition
+    | portDefinition
+    | actionDefinition
+    | calculationDefinition
+    | stateDefinition
+    | constraintDefinition
+    | requirementDefinition
+    | concernDefinition
+    | caseDefinition
+    | analysisCaseDefinition
+    | verificationCaseDefinition
+    | useCaseDefinition
+    | viewDefinition
+    | viewpointDefinition
+    | renderingDefinition
+    | metadataDefinition
+    | allocationDefinition
+    | extendedDefinition
+    ;
+
+usageElement
+    : nonOccurrenceUsageElement
+    | occurrenceUsageElement
+    ;
+
+basicDefinitionPrefix
+    : ABSTRACT
+    | VARIATION
+    ;
+
+definitionExtensionKeyword
+    : prefixMetadataMember
+    ;
+
+definitionPrefix
+    : basicDefinitionPrefix? definitionExtensionKeyword*
+    ;
+
+definition
+    : definitionDeclaration definitionBody
+    ;
+
+definitionDeclaration
+    : identification subclassificationPart?
+    ;
+
+definitionBody
+    : SEMI
+    | LBRACE definitionBodyItem* RBRACE
+    ;
+
+definitionBodyItem
+    : definitionMember
+    | variantUsageMember
+    | nonOccurrenceUsageMember
+    | ( sourceSuccessionMember )? occurrenceUsageMember
+    | aliasMember
+    | importRule
+    ;
+
+definitionMember
+    : memberPrefix definitionElement
+    ;
+
+variantUsageMember
+    : memberPrefix VARIANT variantUsageElement
+    ;
+
+nonOccurrenceUsageMember
+    : memberPrefix nonOccurrenceUsageElement
+    ;
+
+occurrenceUsageMember
+    : memberPrefix occurrenceUsageElement
+    ;
+
+structureUsageMember
+    : memberPrefix structureUsageElement
+    ;
+
+behaviorUsageMember
+    : memberPrefix behaviorUsageElement
+    ;
+
+refPrefix
+    : ( featureDirection )? ( DERIVED )? ( ABSTRACT | VARIATION )? ( CONSTANT )?
+    ;
+
+basicUsagePrefix
+    : refPrefix ( REF )?
+    ;
+
+endUsagePrefix
+    : END ( ownedCrossFeatureMember )?
+    ;
+
+usageExtensionKeyword
+    : prefixMetadataMember
+    ;
+
+unextendedUsagePrefix
+    : endUsagePrefix
+    | basicUsagePrefix
+    ;
+
+usagePrefix
+    : unextendedUsagePrefix usageExtensionKeyword*
+    ;
+
+usage
+    : usageDeclaration usageCompletion
+    ;
+
+usageDeclaration
+    : identification featureSpecializationPart?
+    ;
+
+usageCompletion
+    : valuePart? usageBody
+    ;
+
+usageBody
+    : definitionBody
+    ;
+
+defaultReferenceUsage
+    : refPrefix usage
+    ;
+
+referenceUsage
+    : ( endUsagePrefix | refPrefix ) REF usage
+    ;
+
+variantReference
+    : ownedReferenceSubsetting featureSpecialization* usageBody
+    ;
+
+nonOccurrenceUsageElement
+    : defaultReferenceUsage
+    | referenceUsage
+    | attributeUsage
+    | enumerationUsage
+    | bindingConnectorAsUsage
+    | successionAsUsage
+    | extendedUsage
+    ;
+
+occurrenceUsageElement
+    : structureUsageElement
+    | behaviorUsageElement
+    ;
+
+structureUsageElement
+    : occurrenceUsage
+    | individualUsage
+    | portionUsage
+    | eventOccurrenceUsage
+    | itemUsage
+    | partUsage
+    | viewUsage
+    | renderingUsage
+    | portUsage
+    | connectionUsage
+    | interfaceUsage
+    | allocationUsage
+    | message
+    | flowUsage
+    | successionFlowUsage
+    ;
+
+behaviorUsageElement
+    : actionUsage
+    | calculationUsage
+    | stateUsage
+    | constraintUsage
+    | requirementUsage
+    | concernUsage
+    | caseUsage
+    | analysisCaseUsage
+    | verificationCaseUsage
+    | useCaseUsage
+    | viewpointUsage
+    | performActionUsage
+    | exhibitStateUsage
+    | includeUseCaseUsage
+    | assertConstraintUsage
+    | satisfyRequirementUsage
+    ;
+
+variantUsageElement
+    : variantReference
+    | referenceUsage
+    | attributeUsage
+    | bindingConnectorAsUsage
+    | successionAsUsage
+    | occurrenceUsage
+    | individualUsage
+    | portionUsage
+    | eventOccurrenceUsage
+    | itemUsage
+    | partUsage
+    | viewUsage
+    | renderingUsage
+    | portUsage
+    | connectionUsage
+    | interfaceUsage
+    | allocationUsage
+    | message
+    | flowUsage
+    | successionFlowUsage
+    | behaviorUsageElement
+    ;
+
+subclassificationPart
+    : ( COLON_GT | SPECIALIZES ) ownedSubclassification ( COMMA ownedSubclassification )*
+    ;
+
+attributeDefinition
+    : definitionPrefix ATTRIBUTE DEF definition
+    ;
+
+attributeUsage
+    : usagePrefix ATTRIBUTE usage
+    ;
+
+enumerationDefinition
+    : definitionExtensionKeyword* ENUM DEF definitionDeclaration enumerationBody
+    ;
+
+enumerationBody
+    : SEMI
+    | LBRACE ( annotatingMember | enumerationUsageMember )* RBRACE
+    ;
+
+enumerationUsageMember
+    : memberPrefix enumeratedValue
+    ;
+
+enumeratedValue
+    : ENUM? usage
+    ;
+
+enumerationUsage
+    : usagePrefix ENUM usage
+    ;
+
+occurrenceDefinitionPrefix
+    : basicDefinitionPrefix? ( INDIVIDUAL emptyMultiplicityMember )? definitionExtensionKeyword*
+    ;
+
+occurrenceDefinition
+    : occurrenceDefinitionPrefix OCCURRENCE DEF definition
+    ;
+
+individualDefinition
+    : basicDefinitionPrefix? INDIVIDUAL definitionExtensionKeyword* DEF definition emptyMultiplicityMember
+    ;
+
+emptyMultiplicityMember
+    : emptyMultiplicity
+    ;
+
+occurrenceUsagePrefix
+    : basicUsagePrefix ( INDIVIDUAL )? ( portionKind )? usageExtensionKeyword*
+    ;
+
+occurrenceUsage
+    : occurrenceUsagePrefix OCCURRENCE usage
+    ;
+
+individualUsage
+    : basicUsagePrefix INDIVIDUAL usageExtensionKeyword* usage
+    ;
+
+portionUsage
+    : basicUsagePrefix ( INDIVIDUAL )? portionKind usageExtensionKeyword* usage
+    ;
+
+portionKind
+    : SNAPSHOT
+    | TIMESLICE
+    ;
+
+eventOccurrenceUsage
+    : occurrenceUsagePrefix EVENT ( ownedReferenceSubsetting featureSpecializationPart? | OCCURRENCE usageDeclaration? ) usageCompletion
+    ;
+
+sourceSuccessionMember
+    : THEN sourceSuccession
+    ;
+
+sourceSuccession
+    : sourceEndMember
+    ;
+
+sourceEndMember
+    : sourceEnd
+    ;
+
+sourceEnd
+    : ( ownedMultiplicity )?
+    ;
+
+itemDefinition
+    : occurrenceDefinitionPrefix ITEM DEF definition
+    ;
+
+itemUsage
+    : occurrenceUsagePrefix ITEM usage
+    ;
+
+partDefinition
+    : occurrenceDefinitionPrefix PART DEF definition
+    ;
+
+partUsage
+    : occurrenceUsagePrefix PART usage
+    ;
+
+portDefinition
+    : definitionPrefix PORT DEF definition conjugatedPortDefinitionMember
+    ;
+
+conjugatedPortDefinitionMember
+    : conjugatedPortDefinition
+    ;
+
+conjugatedPortDefinition
+    : portConjugation
+    ;
+
+portUsage
+    : occurrenceUsagePrefix PORT usage
+    ;
+
+conjugatedPortTyping
+    : TILDE qualifiedName
+    ;
+
+connectionDefinition
+    : occurrenceDefinitionPrefix CONNECTION DEF definition
+    ;
+
+connectionUsage
+    : occurrenceUsagePrefix ( CONNECTION usageDeclaration valuePart? ( CONNECT connectorPart )? | CONNECT connectorPart ) usageBody
+    ;
+
+connectorPart
+    : binaryConnectorPart
+    | naryConnectorPart
+    ;
+
+binaryConnectorPart
+    : connectorEndMember TO connectorEndMember
+    ;
+
+naryConnectorPart
+    : LPAREN connectorEndMember COMMA connectorEndMember ( COMMA connectorEndMember )* RPAREN
+    ;
+
+bindingConnectorAsUsage
+    : usagePrefix ( BINDING usageDeclaration )? BIND connectorEndMember EQ connectorEndMember usageBody
+    ;
+
+successionAsUsage
+    : usagePrefix ( SUCCESSION usageDeclaration )? FIRST connectorEndMember THEN connectorEndMember usageBody
+    ;
+
+interfaceDefinition
+    : occurrenceDefinitionPrefix INTERFACE DEF definitionDeclaration interfaceBody
+    ;
+
+interfaceBody
+    : SEMI
+    | LBRACE interfaceBodyItem* RBRACE
+    ;
+
+interfaceBodyItem
+    : definitionMember
+    | variantUsageMember
+    | interfaceNonOccurrenceUsageMember
+    | ( sourceSuccessionMember )? interfaceOccurrenceUsageMember
+    | aliasMember
+    | importRule
+    ;
+
+interfaceNonOccurrenceUsageMember
+    : memberPrefix interfaceNonOccurrenceUsageElement
+    ;
+
+interfaceNonOccurrenceUsageElement
+    : referenceUsage
+    | attributeUsage
+    | enumerationUsage
+    | bindingConnectorAsUsage
+    | successionAsUsage
+    ;
+
+interfaceOccurrenceUsageMember
+    : memberPrefix interfaceOccurrenceUsageElement
+    ;
+
+interfaceOccurrenceUsageElement
+    : defaultInterfaceEnd
+    | structureUsageElement
+    | behaviorUsageElement
+    ;
+
+defaultInterfaceEnd
+    : END usage
+    ;
+
+interfaceUsage
+    : occurrenceUsagePrefix INTERFACE interfaceUsageDeclaration interfaceBody
+    ;
+
+interfaceUsageDeclaration
+    : usageDeclaration valuePart? ( CONNECT interfacePart )?
+    | interfacePart
+    ;
+
+interfacePart
+    : binaryInterfacePart
+    | naryInterfacePart
+    ;
+
+binaryInterfacePart
+    : interfaceEndMember TO interfaceEndMember
+    ;
+
+naryInterfacePart
+    : LPAREN interfaceEndMember COMMA interfaceEndMember ( COMMA interfaceEndMember )* RPAREN
+    ;
+
+interfaceEndMember
+    : interfaceEnd
+    ;
+
+interfaceEnd
+    : ( ownedCrossMultiplicityMember )? ( name ( COLON_COLON_GT | REFERENCES ) )? ownedReferenceSubsetting
+    ;
+
+allocationDefinition
+    : occurrenceDefinitionPrefix ALLOCATION DEF definition
+    ;
+
+allocationUsage
+    : occurrenceUsagePrefix allocationUsageDeclaration usageBody
+    ;
+
+allocationUsageDeclaration
+    : ALLOCATION usageDeclaration ( ALLOCATE connectorPart )?
+    | ALLOCATE connectorPart
+    ;
+
+flowDefinition
+    : occurrenceDefinitionPrefix FLOW DEF definition
+    ;
+
+message
+    : occurrenceUsagePrefix MESSAGE messageDeclaration definitionBody
+    ;
+
+messageDeclaration
+    : usageDeclaration valuePart? ( OF flowPayloadFeatureMember )? ( FROM messageEventMember TO messageEventMember )?
+    | messageEventMember TO messageEventMember
+    ;
+
+messageEventMember
+    : messageEvent
+    ;
+
+messageEvent
+    : ownedReferenceSubsetting
+    ;
+
+flowUsage
+    : occurrenceUsagePrefix FLOW flowDeclaration definitionBody
+    ;
+
+successionFlowUsage
+    : occurrenceUsagePrefix SUCCESSION FLOW flowDeclaration definitionBody
+    ;
+
+flowPayloadFeatureMember
+    : flowPayloadFeature
+    ;
+
+flowPayloadFeature
+    : payloadFeature
+    ;
+
+flowEndSubsetting
+    : qualifiedName
+    | featureChainPrefix
+    ;
+
+featureChainPrefix
+    : ( ownedFeatureChaining DOT )+ ownedFeatureChaining DOT
+    ;
+
+actionDefinition
+    : occurrenceDefinitionPrefix ACTION DEF definitionDeclaration actionBody
+    ;
+
+actionBody
+    : SEMI
+    | LBRACE actionBodyItem* RBRACE
+    ;
+
+actionBodyItem
+    : nonBehaviorBodyItem
+    | initialNodeMember ( actionTargetSuccessionMember )*
+    | ( sourceSuccessionMember )? actionBehaviorMember ( actionTargetSuccessionMember )*
+    | guardedSuccessionMember
+    ;
+
+nonBehaviorBodyItem
+    : importRule
+    | aliasMember
+    | definitionMember
+    | variantUsageMember
+    | nonOccurrenceUsageMember
+    | ( sourceSuccessionMember )? structureUsageMember
+    ;
+
+actionBehaviorMember
+    : behaviorUsageMember
+    | actionNodeMember
+    ;
+
+initialNodeMember
+    : memberPrefix FIRST qualifiedName relationshipBody
+    ;
+
+actionNodeMember
+    : memberPrefix actionNode
+    ;
+
+actionTargetSuccessionMember
+    : memberPrefix actionTargetSuccession
+    ;
+
+guardedSuccessionMember
+    : memberPrefix guardedSuccession
+    ;
+
+actionUsage
+    : occurrenceUsagePrefix ACTION actionUsageDeclaration actionBody
+    ;
+
+actionUsageDeclaration
+    : usageDeclaration valuePart?
+    ;
+
+performActionUsage
+    : occurrenceUsagePrefix PERFORM performActionUsageDeclaration actionBody
+    ;
+
+performActionUsageDeclaration
+    : ( ownedReferenceSubsetting featureSpecializationPart? | ACTION usageDeclaration ) valuePart?
+    ;
+
+actionNode
+    : controlNode
+    | sendNode
+    | acceptNode
+    | assignmentNode
+    | terminateNode
+    | ifNode
+    | whileLoopNode
+    | forLoopNode
+    ;
+
+actionNodeUsageDeclaration
+    : ACTION usageDeclaration?
+    ;
+
+actionNodePrefix
+    : occurrenceUsagePrefix actionNodeUsageDeclaration?
+    ;
+
+controlNode
+    : mergeNode
+    | decisionNode
+    | joinNode
+    | forkNode
+    ;
+
+controlNodePrefix
+    : refPrefix ( INDIVIDUAL )? ( portionKind )? usageExtensionKeyword*
+    ;
+
+mergeNode
+    : controlNodePrefix MERGE usageDeclaration actionBody
+    ;
+
+decisionNode
+    : controlNodePrefix DECIDE usageDeclaration actionBody
+    ;
+
+joinNode
+    : controlNodePrefix JOIN usageDeclaration actionBody
+    ;
+
+forkNode
+    : controlNodePrefix FORK usageDeclaration actionBody
+    ;
+
+acceptNode
+    : occurrenceUsagePrefix acceptNodeDeclaration actionBody
+    ;
+
+acceptNodeDeclaration
+    : actionNodeUsageDeclaration? ACCEPT acceptParameterPart
+    ;
+
+acceptParameterPart
+    : payloadParameterMember ( VIA nodeParameterMember )?
+    ;
+
+payloadParameterMember
+    : payloadParameter
+    ;
+
+payloadParameter
+    : payloadFeature
+    | identification payloadFeatureSpecializationPart? triggerValuePart
+    ;
+
+triggerValuePart
+    : triggerFeatureValue
+    ;
+
+triggerFeatureValue
+    : triggerExpression
+    ;
+
+triggerExpression
+    : ( AT | AFTER ) argumentMember
+    | WHEN argumentExpressionMember
+    ;
+
+sendNode
+    : occurrenceUsagePrefix ( actionNodeUsageDeclaration | actionUsageDeclaration )? SEND ( nodeParameterMember senderReceiverPart? | emptyParameterMember senderReceiverPart )? actionBody
+    ;
+
+sendNodeDeclaration
+    : actionNodeUsageDeclaration? SEND nodeParameterMember senderReceiverPart?
+    ;
+
+senderReceiverPart
+    : VIA nodeParameterMember ( TO nodeParameterMember )?
+    | emptyParameterMember TO nodeParameterMember
+    ;
+
+nodeParameterMember
+    : nodeParameter
+    ;
+
+nodeParameter
+    : featureBinding
+    ;
+
+featureBinding
+    : ownedExpression
+    ;
+
+emptyParameterMember
+    : emptyUsage
+    ;
+
+assignmentNode
+    : occurrenceUsagePrefix assignmentNodeDeclaration actionBody
+    ;
+
+assignmentNodeDeclaration
+    : ( actionNodeUsageDeclaration )? ASSIGN assignmentTargetMember featureChainMember COLON_EQ nodeParameterMember
+    ;
+
+assignmentTargetMember
+    : assignmentTargetParameter
+    ;
+
+assignmentTargetParameter
+    : ( assignmentTargetBinding DOT )?
+    ;
+
+assignmentTargetBinding
+    : nonFeatureChainPrimaryExpression
+    ;
+
+terminateNode
+    : occurrenceUsagePrefix actionNodeUsageDeclaration? TERMINATE ( nodeParameterMember )? actionBody
+    ;
+
+ifNode
+    : actionNodePrefix IF expressionParameterMember actionBodyParameterMember ( ELSE ( actionBodyParameterMember | ifNodeParameterMember ) )?
+    ;
+
+expressionParameterMember
+    : ownedExpression
+    ;
+
+actionBodyParameterMember
+    : actionBodyParameter
+    ;
+
+actionBodyParameter
+    : ( ACTION usageDeclaration? )? LBRACE actionBodyItem* RBRACE
+    ;
+
+ifNodeParameterMember
+    : ifNode
+    ;
+
+whileLoopNode
+    : actionNodePrefix ( WHILE expressionParameterMember | LOOP emptyParameterMember ) actionBodyParameterMember ( UNTIL expressionParameterMember SEMI )?
+    ;
+
+forLoopNode
+    : actionNodePrefix FOR forVariableDeclarationMember IN nodeParameterMember actionBodyParameterMember
+    ;
+
+forVariableDeclarationMember
+    : usageDeclaration
+    ;
+
+forVariableDeclaration
+    : usageDeclaration
+    ;
+
+actionTargetSuccession
+    : ( targetSuccession | guardedTargetSuccession | defaultTargetSuccession ) usageBody
+    ;
+
+targetSuccession
+    : sourceEndMember THEN connectorEndMember
+    ;
+
+guardedTargetSuccession
+    : guardExpressionMember THEN transitionSuccessionMember
+    ;
+
+defaultTargetSuccession
+    : ELSE transitionSuccessionMember
+    ;
+
+guardedSuccession
+    : ( SUCCESSION usageDeclaration )? FIRST featureChainMember guardExpressionMember THEN transitionSuccessionMember usageBody
+    ;
+
+stateDefinition
+    : occurrenceDefinitionPrefix STATE DEF definitionDeclaration stateDefBody
+    ;
+
+stateDefBody
+    : SEMI
+    | ( PARALLEL )? LBRACE stateBodyItem* RBRACE
+    ;
+
+stateBodyItem
+    : nonBehaviorBodyItem
+    | ( sourceSuccessionMember )? behaviorUsageMember ( targetTransitionUsageMember )*
+    | transitionUsageMember
+    | entryActionMember ( entryTransitionMember )*
+    | doActionMember
+    | exitActionMember
+    ;
+
+entryActionMember
+    : memberPrefix ENTRY stateActionUsage
+    ;
+
+doActionMember
+    : memberPrefix DO stateActionUsage
+    ;
+
+exitActionMember
+    : memberPrefix EXIT stateActionUsage
+    ;
+
+entryTransitionMember
+    : memberPrefix ( guardedTargetSuccession | THEN transitionSuccessionMember ) SEMI
+    ;
+
+stateActionUsage
+    : emptyActionUsage SEMI
+    | statePerformActionUsage
+    | stateAcceptActionUsage
+    | stateSendActionUsage
+    | stateAssignmentActionUsage
+    ;
+
+statePerformActionUsage
+    : performActionUsageDeclaration actionBody
+    ;
+
+stateAcceptActionUsage
+    : acceptNodeDeclaration actionBody
+    ;
+
+stateSendActionUsage
+    : sendNodeDeclaration actionBody
+    ;
+
+stateAssignmentActionUsage
+    : assignmentNodeDeclaration actionBody
+    ;
+
+transitionUsageMember
+    : memberPrefix transitionUsage
+    ;
+
+targetTransitionUsageMember
+    : memberPrefix targetTransitionUsage
+    ;
+
+stateUsage
+    : occurrenceUsagePrefix STATE actionUsageDeclaration stateUsageBody
+    ;
+
+stateUsageBody
+    : SEMI
+    | ( PARALLEL )? LBRACE stateBodyItem* RBRACE
+    ;
+
+exhibitStateUsage
+    : occurrenceUsagePrefix EXHIBIT ( ownedReferenceSubsetting featureSpecializationPart? | STATE usageDeclaration ) valuePart? stateUsageBody
+    ;
+
+transitionUsage
+    : TRANSITION ( usageDeclaration FIRST )? featureChainMember emptyParameterMember ( emptyParameterMember triggerActionMember )? ( guardExpressionMember )? ( effectBehaviorMember )? THEN transitionSuccessionMember actionBody
+    ;
+
+targetTransitionUsage
+    : emptyParameterMember ( TRANSITION ( emptyParameterMember triggerActionMember )? ( guardExpressionMember )? ( effectBehaviorMember )? | emptyParameterMember triggerActionMember ( guardExpressionMember )? ( effectBehaviorMember )? | guardExpressionMember ( effectBehaviorMember )? )? THEN transitionSuccessionMember actionBody
+    ;
+
+triggerActionMember
+    : ACCEPT triggerAction
+    ;
+
+triggerAction
+    : acceptParameterPart
+    ;
+
+guardExpressionMember
+    : IF ownedExpression
+    ;
+
+effectBehaviorMember
+    : DO effectBehaviorUsage
+    ;
+
+effectBehaviorUsage
+    : emptyActionUsage
+    | transitionPerformActionUsage
+    | transitionAcceptActionUsage
+    | transitionSendActionUsage
+    | transitionAssignmentActionUsage
+    ;
+
+transitionPerformActionUsage
+    : performActionUsageDeclaration ( LBRACE actionBodyItem* RBRACE )?
+    ;
+
+transitionAcceptActionUsage
+    : acceptNodeDeclaration ( LBRACE actionBodyItem* RBRACE )?
+    ;
+
+transitionSendActionUsage
+    : sendNodeDeclaration ( LBRACE actionBodyItem* RBRACE )?
+    ;
+
+transitionAssignmentActionUsage
+    : assignmentNodeDeclaration ( LBRACE actionBodyItem* RBRACE )?
+    ;
+
+transitionSuccessionMember
+    : transitionSuccession
+    ;
+
+transitionSuccession
+    : emptyEndMember connectorEndMember
+    ;
+
+emptyEndMember
+    : emptyFeature
+    ;
+
+calculationDefinition
+    : occurrenceDefinitionPrefix CALC DEF definitionDeclaration calculationBody
+    ;
+
+calculationUsage
+    : occurrenceUsagePrefix CALC actionUsageDeclaration calculationBody
+    ;
+
+calculationBody
+    : SEMI
+    | LBRACE calculationBodyPart RBRACE
+    ;
+
+calculationBodyPart
+    : calculationBodyItem* ( resultExpressionMember )?
+    ;
+
+calculationBodyItem
+    : actionBodyItem
+    | returnParameterMember
+    ;
+
+returnParameterMember
+    : memberPrefix? RETURN usageElement
+    ;
+
+constraintDefinition
+    : occurrenceDefinitionPrefix CONSTRAINT DEF definitionDeclaration calculationBody
+    ;
+
+constraintUsage
+    : occurrenceUsagePrefix CONSTRAINT constraintUsageDeclaration calculationBody
+    ;
+
+assertConstraintUsage
+    : occurrenceUsagePrefix ASSERT ( NOT )? ( ownedReferenceSubsetting featureSpecializationPart? | CONSTRAINT constraintUsageDeclaration ) calculationBody
+    ;
+
+constraintUsageDeclaration
+    : usageDeclaration valuePart?
+    ;
+
+requirementDefinition
+    : occurrenceDefinitionPrefix REQUIREMENT DEF definitionDeclaration requirementBody
+    ;
+
+requirementBody
+    : SEMI
+    | LBRACE requirementBodyItem* RBRACE
+    ;
+
+requirementBodyItem
+    : definitionBodyItem
+    | subjectMember
+    | requirementConstraintMember
+    | framedConcernMember
+    | requirementVerificationMember
+    | actorMember
+    | stakeholderMember
+    ;
+
+subjectMember
+    : memberPrefix subjectUsage
+    ;
+
+subjectUsage
+    : SUBJECT usageExtensionKeyword* usage
+    ;
+
+requirementConstraintMember
+    : memberPrefix? requirementKind requirementConstraintUsage
+    ;
+
+requirementKind
+    : ASSUME
+    | REQUIRE
+    ;
+
+requirementConstraintUsage
+    : ownedReferenceSubsetting featureSpecializationPart? requirementBody
+    | ( usageExtensionKeyword* CONSTRAINT | usageExtensionKeyword+ ) constraintUsageDeclaration calculationBody
+    ;
+
+framedConcernMember
+    : memberPrefix? FRAME framedConcernUsage
+    ;
+
+framedConcernUsage
+    : ownedReferenceSubsetting featureSpecializationPart? calculationBody
+    | ( usageExtensionKeyword* CONCERN | usageExtensionKeyword+ ) calculationUsageDeclaration calculationBody
+    ;
+
+actorMember
+    : memberPrefix actorUsage
+    ;
+
+actorUsage
+    : ACTOR usageExtensionKeyword* usage
+    ;
+
+stakeholderMember
+    : memberPrefix stakeholderUsage
+    ;
+
+stakeholderUsage
+    : STAKEHOLDER usageExtensionKeyword* usage
+    ;
+
+requirementUsage
+    : occurrenceUsagePrefix REQUIREMENT constraintUsageDeclaration requirementBody
+    ;
+
+satisfyRequirementUsage
+    : occurrenceUsagePrefix ( ASSERT ( NOT )? )? SATISFY ( ownedReferenceSubsetting featureSpecializationPart? | REQUIREMENT usageDeclaration ) valuePart? ( BY satisfactionSubjectMember )? requirementBody
+    ;
+
+satisfactionSubjectMember
+    : satisfactionParameter
+    ;
+
+satisfactionParameter
+    : satisfactionFeatureValue
+    ;
+
+satisfactionFeatureValue
+    : satisfactionReferenceExpression
+    ;
+
+satisfactionReferenceExpression
+    : featureChainMember
+    ;
+
+concernDefinition
+    : occurrenceDefinitionPrefix CONCERN DEF definitionDeclaration requirementBody
+    ;
+
+concernUsage
+    : occurrenceUsagePrefix CONCERN constraintUsageDeclaration requirementBody
+    ;
+
+caseDefinition
+    : occurrenceDefinitionPrefix CASE DEF definitionDeclaration caseBody
+    ;
+
+caseUsage
+    : occurrenceUsagePrefix CASE constraintUsageDeclaration caseBody
+    ;
+
+caseBody
+    : SEMI
+    | LBRACE caseBodyItem* ( resultExpressionMember )? RBRACE
+    ;
+
+caseBodyItem
+    : actionBodyItem
+    | returnParameterMember
+    | subjectMember
+    | actorMember
+    | objectiveMember
+    ;
+
+objectiveMember
+    : memberPrefix OBJECTIVE objectiveRequirementUsage
+    ;
+
+objectiveRequirementUsage
+    : usageExtensionKeyword* constraintUsageDeclaration requirementBody
+    ;
+
+analysisCaseDefinition
+    : occurrenceDefinitionPrefix ANALYSIS DEF definitionDeclaration caseBody
+    ;
+
+analysisCaseUsage
+    : occurrenceUsagePrefix ANALYSIS constraintUsageDeclaration caseBody
+    ;
+
+verificationCaseDefinition
+    : occurrenceDefinitionPrefix VERIFICATION DEF definitionDeclaration caseBody
+    ;
+
+verificationCaseUsage
+    : occurrenceUsagePrefix VERIFICATION constraintUsageDeclaration caseBody
+    ;
+
+requirementVerificationMember
+    : memberPrefix VERIFY requirementVerificationUsage
+    ;
+
+requirementVerificationUsage
+    : ownedReferenceSubsetting featureSpecialization* requirementBody
+    | ( usageExtensionKeyword* REQUIREMENT | usageExtensionKeyword+ ) constraintUsageDeclaration requirementBody
+    ;
+
+useCaseDefinition
+    : occurrenceDefinitionPrefix USE CASE DEF definitionDeclaration caseBody
+    ;
+
+useCaseUsage
+    : occurrenceUsagePrefix USE CASE constraintUsageDeclaration caseBody
+    ;
+
+includeUseCaseUsage
+    : occurrenceUsagePrefix INCLUDE ( ownedReferenceSubsetting featureSpecializationPart? | USE CASE usageDeclaration ) valuePart? caseBody
+    ;
+
+viewDefinition
+    : occurrenceDefinitionPrefix VIEW DEF definitionDeclaration viewDefinitionBody
+    ;
+
+viewDefinitionBody
+    : SEMI
+    | LBRACE viewDefinitionBodyItem* RBRACE
+    ;
+
+viewDefinitionBodyItem
+    : definitionBodyItem
+    | elementFilterMember
+    | viewRenderingMember
+    ;
+
+viewRenderingMember
+    : memberPrefix RENDER viewRenderingUsage
+    ;
+
+viewRenderingUsage
+    : ownedReferenceSubsetting featureSpecializationPart? usageBody
+    | ( usageExtensionKeyword* RENDERING | usageExtensionKeyword+ ) usage
+    ;
+
+viewUsage
+    : occurrenceUsagePrefix VIEW usageDeclaration? valuePart? viewBody
+    ;
+
+viewBody
+    : SEMI
+    | LBRACE viewBodyItem* RBRACE
+    ;
+
+viewBodyItem
+    : definitionBodyItem
+    | elementFilterMember
+    | viewRenderingMember
+    | expose
+    ;
+
+expose
+    : EXPOSE ( membershipExpose | namespaceExpose ) relationshipBody
+    ;
+
+membershipExpose
+    : membershipImport
+    ;
+
+namespaceExpose
+    : namespaceImport
+    ;
+
+viewpointDefinition
+    : occurrenceDefinitionPrefix VIEWPOINT DEF definitionDeclaration requirementBody
+    ;
+
+viewpointUsage
+    : occurrenceUsagePrefix VIEWPOINT constraintUsageDeclaration requirementBody
+    ;
+
+renderingDefinition
+    : occurrenceDefinitionPrefix RENDERING DEF definition
+    ;
+
+renderingUsage
+    : occurrenceUsagePrefix RENDERING usage
+    ;
+
+metadataDefinition
+    : ( ABSTRACT )? definitionExtensionKeyword* METADATA DEF definition
+    ;
+
+prefixMetadataUsage
+    : ownedFeatureTyping
+    ;
+
+metadataUsage
+    : usageExtensionKeyword* ( AT_SIGN | METADATA ) metadataUsageDeclaration ( ABOUT annotation ( COMMA annotation )* )? metadataBody
+    ;
+
+metadataUsageDeclaration
+    : ( identification ( COLON | TYPED BY ) )? ownedFeatureTyping
+    ;
+
+metadataBodyUsageMember
+    : metadataBodyUsage
+    ;
+
+metadataBodyUsage
+    : REF? ( COLON_GT_GT | REDEFINES )? ownedRedefinition featureSpecializationPart? valuePart? metadataBody
+    ;
+
+extendedDefinition
+    : basicDefinitionPrefix? definitionExtensionKeyword+ DEF definition
+    ;
+
+extendedUsage
+    : unextendedUsagePrefix usageExtensionKeyword+ usage
+    ;
+
+filterPackageImportDeclaration
+    : membershipImport
+    | namespaceImportDirect
+    ;
+
+namespaceImportDirect
+    : qualifiedName COLON_COLON STAR ( COLON_COLON STAR_STAR )?
+    ;
+
+
+// ===== Stub rules for undefined references =====
+// These rules are referenced in the spec but not fully defined.
+// They need manual review and completion.
+
+calculationUsageDeclaration
+    : usageDeclaration valuePart?
+    ;
+
+emptyActionUsage
+    : /* epsilon */
+    ;
+
+emptyFeature
+    : /* epsilon */
+    ;
+
+emptyMultiplicity
+    : /* epsilon */
+    ;
+
+emptyUsage
+    : /* epsilon */
+    ;
+
+filterPackageImport
+    : IDENTIFIER  /* TODO: stub for filterPackageImport */
+    ;
+
+nonFeatureChainPrimaryExpression
+    : IDENTIFIER  /* TODO: stub for nonFeatureChainPrimaryExpression */
+    ;
+
+portConjugation
+    : /* epsilon */
     ;

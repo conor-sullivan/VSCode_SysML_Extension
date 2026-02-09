@@ -1,8 +1,8 @@
 package SpaceMissionSystem {
     /**
-     * Space mission example demonstrating complex SysML v2.0 system modeling
-     * including hierarchical decomposition, state machines, and requirements
-     */
+    * Space mission example demonstrating complex SysML v2.0 system modeling
+    * including hierarchical decomposition, state machines, and requirements
+    */
 
     // Mission-level system
     part def SpaceMission {
@@ -19,14 +19,14 @@ package SpaceMissionSystem {
             state launch;
             state transit;
             state operations;
-            state return;
+            state returnToEarth;
             state complete;
 
-            transition preparation to launch when launchReady;
-            transition launch to transit when orbitAchieved;
-            transition transit to operations when destinationReached;
-            transition operations to return when objectivesComplete;
-            transition return to complete when spacecraftRecovered;
+            transition first preparation then launch;
+            transition first launch then transit;
+            transition first transit then operations;
+            transition first operations then returnToEarth;
+            transition first returnToEarth then complete;
         }
     }
 
@@ -61,9 +61,9 @@ package SpaceMissionSystem {
             state firing;
             state maneuvering;
 
-            transition idle to firing when ignitionCommand;
-            transition firing to idle when shutdownCommand;
-            transition idle to maneuvering when maneuverCommand;
+            transition first idle then firing;
+            transition first firing then idle;
+            transition first idle then maneuvering;
         }
     }
 
@@ -94,8 +94,8 @@ package SpaceMissionSystem {
             state transmitting;
             state receiving;
 
-            transition standby to transmitting when transmitCommand;
-            transition standby to receiving when receiveCommand;
+            transition first standby then transmitting;
+            transition first standby then receiving;
         }
     }
 
@@ -122,7 +122,7 @@ package SpaceMissionSystem {
         constraint lifeSafetyLimits {
             oxygenLevel >= 0.18 and
             co2Level <= 0.005 and
-            temperature >= 18.0 [°C] and temperature <= 24.0 [°C]
+            temperature >= 18.0 [degC] and temperature <= 24.0 [degC]
         }
     }
 
@@ -165,7 +165,7 @@ package SpaceMissionSystem {
         launch;
         transit;
         operations;
-        return;
+        returnToEarth;
         complete;
     }
 
@@ -234,23 +234,23 @@ package SpaceMissionSystem {
         }
     }
 
-    // Actor definitions
-    actor def MissionTeam {
+    // Actor definitions (using part def since actor is a usage modifier in SysML v2)
+    part def MissionTeam {
         attribute teamSize : Integer;
         attribute experience : Real;
     }
 
-    actor def FlightDirector {
+    part def FlightDirector {
         attribute certification : String;
         attribute yearsExperience : Integer;
     }
 
-    actor def Engineer {
+    part def Engineer {
         attribute specialty : String;
         attribute clearanceLevel : String;
     }
 
-    actor def Scientist {
+    part def Scientist {
         attribute field : String;
         attribute publicationsCount : Integer;
     }
@@ -321,14 +321,13 @@ package SpaceMissionSystem {
 
     // Example mission instance
     part marsMission : SpaceMission {
-        :>> missionDuration = 365.0 [day];
-        :>> missionObjectives = ["Mars surface exploration", "Sample collection", "Atmospheric analysis"];
+        :>> missionDuration = 365.0;
         :>> currentPhase = MissionPhase::preparation;
 
         :>> spacecraft {
-            :>> mass = 8500.0 [kg];
+            :>> mass = 8500.0;
             :>> fuelLevel = 0.95;
-            :>> altitude = 0.0 [km];
+            :>> altitude = 0.0;
         }
     }
 }

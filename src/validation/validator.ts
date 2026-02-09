@@ -16,35 +16,29 @@ export class SysMLValidator {
     async validate(document: vscode.TextDocument): Promise<vscode.Diagnostic[]> {
         const diagnostics: vscode.Diagnostic[] = [];
 
+        // Phase 1: Try semantic resolution for enhanced validation
+        let elements: SysMLElement[] = [];
         try {
-            // Phase 3: Use semantic resolution for enhanced validation
             const resolutionResult = await this._parser.parseWithSemanticResolution(document);
-
-            // Publish semantic diagnostics (type errors, validation errors)
             this.semanticDiagnostics.publish(document.uri, resolutionResult.diagnostics);
-
-            // Convert enriched elements back to SysML elements for legacy validation
-            const elements = this._parser.convertEnrichedToSysMLElements(resolutionResult.elements);
-
-            // Run basic validation checks
-            this.validateElements(elements, diagnostics, document);
-            this.validateRelationships(diagnostics, document);
-            this.validateSyntax(document, diagnostics);
-            this.validateKeywordTypos(document, diagnostics);
-
-            this.diagnosticCollection.set(document.uri, diagnostics);
-        } catch (error) {
-            // Log error but don't crash the extension
-            const message = `Error during SysML validation: ${error instanceof Error ? error.message : 'Unknown error'}`;
+            elements = this._parser.convertEnrichedToSysMLElements(resolutionResult.elements);
+        } catch {
+            // Semantic resolution failed — fall back to basic parse
             try {
-                const { getOutputChannel } = require('../extension');
-                getOutputChannel()?.appendLine(message);
+                elements = this._parser.parse(document);
             } catch {
-                // Silently fail if output channel not available
+                // Even basic parse failed — continue with empty elements
             }
-            vscode.window.showErrorMessage(`SysML validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
 
+        // Phase 2: Run each validation step independently so failures in one don't block others
+        try { this.validateElements(elements, diagnostics, document); } catch { /* continue */ }
+        try { this.validateRelationships(diagnostics, document); } catch { /* continue */ }
+        try { this.validateSyntax(document, diagnostics); } catch { /* continue */ }
+        try { this.validateKeywordTypos(document, diagnostics); } catch { /* continue */ }
+        try { this.collectParseErrors(diagnostics, document); } catch { /* continue */ }
+
+        this.diagnosticCollection.set(document.uri, diagnostics);
         return diagnostics;
     }
 
@@ -338,32 +332,70 @@ export class SysMLValidator {
         }
     }
 
+    /**
+     * Collect ANTLR parse errors as diagnostics.
+     * Parses with includeErrors=true to get error elements.
+     */
+    private collectParseErrors(diagnostics: vscode.Diagnostic[], document: vscode.TextDocument): void {
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const antlr = (this._parser as any).getANTLRParser();
+            if (!antlr) { return; }
+
+            const allElements = antlr.parseDocument(document, true);
+            const errorElements = allElements.filter((el: SysMLElement) => el.type === 'error');
+
+            for (const errorEl of errorElements) {
+                const errorMsg = (errorEl.attributes.get('error') as string) || errorEl.name;
+                // Deduplicate: don't add if we already have a diagnostic at the same range with similar message
+                const isDuplicate = diagnostics.some(d =>
+                    d.range.start.line === errorEl.range.start.line &&
+                    d.range.start.character === errorEl.range.start.character
+                );
+                if (!isDuplicate) {
+                    diagnostics.push(new vscode.Diagnostic(
+                        errorEl.range,
+                        errorMsg,
+                        vscode.DiagnosticSeverity.Error
+                    ));
+                }
+            }
+        } catch {
+            // Silently fail — parse errors are supplementary
+        }
+    }
+
     private validateSyntax(document: vscode.TextDocument, diagnostics: vscode.Diagnostic[]): void {
         const text = document.getText();
-        let braceCount = 0;
+        // Use a stack to track each opening brace position so unclosed braces
+        // produce individual diagnostics (not just one aggregate message).
+        const braceStack: { line: number; col: number }[] = [];
         let lineNumber = 0;
 
         for (const line of text.split('\n')) {
-            const openBraces = (line.match(/{/g) || []).length;
-            const closeBraces = (line.match(/}/g) || []).length;
-
-            braceCount += openBraces - closeBraces;
-
-            if (braceCount < 0) {
-                diagnostics.push(new vscode.Diagnostic(
-                    new vscode.Range(lineNumber, 0, lineNumber, line.length),
-                    'Unmatched closing brace',
-                    vscode.DiagnosticSeverity.Error
-                ));
+            for (let col = 0; col < line.length; col++) {
+                if (line[col] === '{') {
+                    braceStack.push({ line: lineNumber, col });
+                } else if (line[col] === '}') {
+                    if (braceStack.length > 0) {
+                        braceStack.pop();
+                    } else {
+                        diagnostics.push(new vscode.Diagnostic(
+                            new vscode.Range(lineNumber, col, lineNumber, col + 1),
+                            'Unmatched closing brace',
+                            vscode.DiagnosticSeverity.Error
+                        ));
+                    }
+                }
             }
-
             lineNumber++;
         }
 
-        if (braceCount > 0) {
+        // Each remaining unclosed brace gets its own diagnostic
+        for (const brace of braceStack) {
             diagnostics.push(new vscode.Diagnostic(
-                new vscode.Range(lineNumber - 1, 0, lineNumber - 1, 0),
-                'Unclosed braces in document',
+                new vscode.Range(brace.line, brace.col, brace.line, brace.col + 1),
+                'Unclosed brace',
                 vscode.DiagnosticSeverity.Error
             ));
         }

@@ -14,7 +14,7 @@ package CameraStateMachine {
         then initializing;
 
         state initializing : CameraState {
-            entry / initializeSensors();
+            entry action initializeSensors;
         }
 
         transition initializing_to_ready
@@ -22,28 +22,28 @@ package CameraStateMachine {
         then ready;
 
         state ready : CameraState {
-            entry / displayReady();
+            entry action displayReady;
 
             // Nested states within ready
             state idle : CameraState;
 
             state focusing : CameraState {
-                entry / activateAutofocus();
-                do / continuousFocus();
+                entry action activateAutofocus;
+                do action continuousFocus;
             }
 
             state capturing : CameraState {
-                entry / openShutter();
-                do / captureImage();
-                exit / closeShutter();
+                entry action openShutter;
+                do action captureImage;
+                exit action closeShutter;
             }
 
             state processing : CameraState {
-                entry / processImageData();
+                entry action processImageData;
             }
 
             state reviewing : CameraState {
-                entry / displayImage();
+                entry action displayImage;
             }
 
             // Transitions within ready state
@@ -77,7 +77,7 @@ package CameraStateMachine {
         }
 
         state lowBattery : CameraState {
-            entry / displayLowBatteryWarning();
+            entry action displayLowBatteryWarning;
         }
 
         transition ready_to_lowBattery
@@ -102,14 +102,14 @@ package CameraStateMachine {
     }
 
     // Events
-    event def PowerOnEvent;
-    event def PowerOffEvent;
-    event def HalfPressShutterEvent;
-    event def FullPressShutterEvent;
-    event def ReleaseShutterEvent;
-    event def ConfirmEvent;
-    event def LowBatteryEvent;
-    event def BatteryChargedEvent;
+    occurrence def PowerOnEvent;
+    occurrence def PowerOffEvent;
+    occurrence def HalfPressShutterEvent;
+    occurrence def FullPressShutterEvent;
+    occurrence def ReleaseShutterEvent;
+    occurrence def ConfirmEvent;
+    occurrence def LowBatteryEvent;
+    occurrence def BatteryChargedEvent;
 
     // Actions
     action def initializeSensors;

@@ -1,9 +1,9 @@
 package CameraUseCases {
 
-    // Actors
-    actor def Photographer;
-    actor def CameraSystem;
-    actor def StorageDevice;
+    // Actors (declared as part defs; 'actor' is a usage modifier in SysML v2)
+    part def Photographer;
+    part def CameraSystem;
+    part def StorageDevice;
 
     // Use Cases
     use case def TakePhoto {

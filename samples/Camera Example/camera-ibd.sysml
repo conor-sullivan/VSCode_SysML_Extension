@@ -37,25 +37,17 @@ package CameraTestIBD {
         // Connectors rendered on the IBD canvas
         //////////////////////////////////////////////////////////////////////
 
-        connection powerFeed {
-            end primary : gripBattery.supply;
-            end main : camera.power.supply;
-        }
+        connection powerFeed
+            connect gripBattery to camera::power;
 
-        connection lensToSensor {
-            end lens : camera.optics.outgoingLight;
-            end sensor : camera.imaging.intakeLight;
-        }
+        connection lensToSensor
+            connect camera::optics to camera::imaging;
 
-        connection sensorPixels {
-            end source : camera.imaging.pixelBus;
-            end sink : camera.controller.commandBus;
-        }
+        connection sensorPixels
+            connect camera::imaging to camera::controller;
 
-        connection outputLink {
-            end controller : camera.controller.commandBus;
-            end media : camera.mediaOut;
-        }
+        connection outputLink
+            connect camera::controller to camera::mediaOut;
     }
 
     part benchRig : CameraSystemAssembly;

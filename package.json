@@ -258,11 +258,14 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run antlr:generate && npm run compile && npm run build:webview-assets",
-    "antlr:generate": "npm run antlr:lexer && npm run antlr:copy-tokens && npm run antlr:parser",
-    "antlr:lexer": "cd grammar && java -jar ../node_modules/antlr4ts-cli/target/antlr4-typescript-4.9.0-SNAPSHOT-complete.jar -visitor -no-listener -o ../src/parser/generated/grammar SysMLv2Lexer.g4",
+    "antlr:generate": "npm run antlr:lexer && npm run antlr:copy-tokens && npm run antlr:parser && npm run antlr:postprocess",
+    "antlr:lexer": "cd grammar && java -Xss16m -jar ../tools/antlr-4.13.2-complete.jar -Dlanguage=TypeScript -visitor -no-listener -o ../src/parser/generated/grammar SysMLv2Lexer.g4",
     "antlr:copy-tokens": "cp src/parser/generated/grammar/SysMLv2Lexer.tokens grammar/",
-    "antlr:parser": "cd grammar && java -jar ../node_modules/antlr4ts-cli/target/antlr4-typescript-4.9.0-SNAPSHOT-complete.jar -visitor -no-listener -o ../src/parser/generated/grammar SysMLv2.g4",
+    "antlr:parser": "cd grammar && java -Xss16m -jar ../tools/antlr-4.13.2-complete.jar -Dlanguage=TypeScript -visitor -no-listener -o ../src/parser/generated/grammar SysMLv2.g4",
+    "antlr:postprocess": "node scripts/postprocess-antlr.js",
     "antlr:clean": "rimraf src/parser/generated",
+    "grammar:from-spec": "python3 scripts/grammar/generate_grammar.py --cache",
+    "grammar:full": "npm run grammar:from-spec && npm run antlr:generate",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
@@ -311,8 +314,7 @@
     "typescript": "^5.6.3"
   },
   "dependencies": {
-    "antlr4ts": "^0.5.0-alpha.4",
-    "antlr4ts-cli": "^0.5.0-alpha.4",
+    "antlr4": "^4.13.2",
     "elkjs": "^0.11.0"
   },
   "overrides": {

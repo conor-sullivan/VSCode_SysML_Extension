@@ -178,17 +178,16 @@ package TestPackage {
     use case ParallelProcess {
         action processA;
         action processB;
-        join merge;
+        join mergePoint;
 
         first start;
-        first start then fork1;
 
         fork fork1;
         then processA;
         then processB;
-        first processA then merge;
-        first processB then merge;
-        first merge then done;
+        first processA then mergePoint;
+        first processB then mergePoint;
+        first mergePoint then done;
     }
 }`;
 

@@ -1,8 +1,8 @@
 package VehicleModel {
     /**
-     * Basic vehicle model demonstrating SysML v2.0 syntax
-     * including parts, attributes, ports, constraints, and requirements
-     */
+    * Basic vehicle model demonstrating SysML v2.0 syntax
+    * including parts, attributes, ports, constraints, and requirements
+    */
 
     part def Vehicle {
         part engine : Engine;
@@ -94,7 +94,7 @@ package VehicleModel {
         }
     }
 
-    actor def Driver {
+    part def Driver {
         attribute experience : Real;
         attribute licenseValid : Boolean;
     }

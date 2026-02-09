@@ -29,13 +29,36 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<vscode.Tre
         }
 
         this.debounceTimer = setTimeout(async () => {
-            if (this.isLoading) return;
+            if (this.isLoading) {
+                try {
+                    const { getOutputChannel } = require('../extension');
+                    getOutputChannel()?.appendLine('ModelExplorer: loadDocument skipped (already loading)');
+                } catch { /* ignore */ }
+                return;
+            }
             this.isLoading = true;
+
+            try {
+                const { getOutputChannel } = require('../extension');
+                getOutputChannel()?.appendLine(`ModelExplorer: Starting parseWithSemanticResolution for ${document.fileName}`);
+            } catch { /* ignore */ }
 
             try {
                 // Phase 3: Use semantic resolution for enhanced element data
                 const resolutionResult = await this._parser.parseWithSemanticResolution(document);
+
+                try {
+                    const { getOutputChannel } = require('../extension');
+                    getOutputChannel()?.appendLine(`ModelExplorer: Resolution returned ${resolutionResult.elements.length} enriched elements`);
+                } catch { /* ignore */ }
+
                 this.rootElements = this._parser.convertEnrichedToSysMLElements(resolutionResult.elements);
+
+                try {
+                    const { getOutputChannel } = require('../extension');
+                    getOutputChannel()?.appendLine(`ModelExplorer: Converted to ${this.rootElements.length} tree root elements, firing change event`);
+                } catch { /* ignore */ }
+
                 this._onDidChangeTreeData.fire();
             } finally {
                 this.isLoading = false;

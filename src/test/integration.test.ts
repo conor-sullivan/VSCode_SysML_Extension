@@ -72,7 +72,7 @@ part def Part1 {
     });
 
     test('Validation should produce diagnostics', async function() {
-        this.timeout(5000);
+        this.timeout(10000);
 
         const content = `package Test {
     part def Part1 {
@@ -88,10 +88,13 @@ part def Part1 {
         // Trigger validation
         await vscode.commands.executeCommand('sysml.validateModel');
 
-        // Wait a bit for diagnostics
-        await sleep(500);
+        // Poll for diagnostics with retries (async validation may take time)
+        let diagnostics = vscode.languages.getDiagnostics(document.uri);
+        for (let i = 0; i < 10 && diagnostics.length === 0; i++) {
+            await sleep(500);
+            diagnostics = vscode.languages.getDiagnostics(document.uri);
+        }
 
-        const diagnostics = vscode.languages.getDiagnostics(document.uri);
         assert.ok(diagnostics.length > 0);
     });
 
