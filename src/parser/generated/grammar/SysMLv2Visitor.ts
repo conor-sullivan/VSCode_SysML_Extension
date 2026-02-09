@@ -254,6 +254,7 @@ import { UsageCompletionContext } from "./SysMLv2";
 import { UsageBodyContext } from "./SysMLv2";
 import { DefaultReferenceUsageContext } from "./SysMLv2";
 import { ReferenceUsageContext } from "./SysMLv2";
+import { EndFeatureUsageContext } from "./SysMLv2";
 import { VariantReferenceContext } from "./SysMLv2";
 import { NonOccurrenceUsageElementContext } from "./SysMLv2";
 import { OccurrenceUsageElementContext } from "./SysMLv2";
@@ -505,6 +506,7 @@ import { PortConjugationContext } from "./SysMLv2";
  */
 export class SysMLv2Visitor<Result> extends ParseTreeVisitor<Result> {
     [key: string]: any;
+	
 	
 	
 	

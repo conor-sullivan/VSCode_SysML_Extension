@@ -1201,6 +1201,13 @@ referenceUsage
     : ( endUsagePrefix | refPrefix ) REF usage
     ;
 
+// Unnamed end feature with specialization (e.g., end :>> QualifiedName;)
+// Handles end features in connection/flow/interface definition bodies
+// where no name is given, only a redefines/subsets/typing.
+endFeatureUsage
+    : endUsagePrefix featureDeclaration usageCompletion
+    ;
+
 variantReference
     : ownedReferenceSubsetting featureSpecialization* usageBody
     ;
@@ -1208,6 +1215,7 @@ variantReference
 nonOccurrenceUsageElement
     : defaultReferenceUsage
     | referenceUsage
+    | endFeatureUsage
     | attributeUsage
     | enumerationUsage
     | bindingConnectorAsUsage
