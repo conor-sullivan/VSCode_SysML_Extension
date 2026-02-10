@@ -13,6 +13,15 @@ export class SysMLDocumentSymbolProvider implements vscode.DocumentSymbolProvide
             return [];
         }
 
+        // Wait for any centralized parse to finish so we don't trigger a
+        // duplicate heavy ANTLR parse that would block the UI before the
+        // progress notification is visible.
+        await this._parser.waitForParse();
+
+        if (token.isCancellationRequested) {
+            return [];
+        }
+
         // Phase 3: Use semantic resolution for enhanced symbol information
         const resolutionResult = await this._parser.parseWithSemanticResolution(document);
         const elements = this._parser.convertEnrichedToSysMLElements(resolutionResult.elements);

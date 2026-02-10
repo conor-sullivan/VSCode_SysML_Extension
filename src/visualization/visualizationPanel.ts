@@ -146,7 +146,13 @@ export class VisualizationPanel {
         }
         this._lastContentHash = contentHash;
 
-        // Execute immediately - no debounce needed since content hash prevents redundant work
+        // Tell the webview to show loading indicator immediately
+        this._panel.webview.postMessage({ command: 'showLoading', message: 'Parsing SysML model...' });
+
+        // Yield to the event loop so the webview can render the loading state
+        // before the synchronous ANTLR parse blocks the extension host
+        await new Promise(resolve => setTimeout(resolve, 0));
+
         await this._doUpdateVisualization();
     }
 
@@ -2892,6 +2898,12 @@ export class VisualizationPanel {
         window.addEventListener('message', event => {
             const message = event.data;
             switch (message.command) {
+                case 'showLoading':
+                    showLoading(message.message || 'Parsing SysML model...');
+                    break;
+                case 'hideLoading':
+                    hideLoading();
+                    break;
                 case 'update':
                     // Quick hash check - skip render if data unchanged
                     const newHash = quickHash({

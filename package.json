@@ -111,6 +111,12 @@
         "icon": "$(layout-panel)"
       },
       {
+        "command": "sysml.clearCache",
+        "title": "Clear Parse Cache",
+        "category": "SysML",
+        "icon": "$(trash)"
+      },
+      {
         "command": "sysml.refreshModelTree",
         "title": "Refresh Model Tree",
         "category": "SysML",

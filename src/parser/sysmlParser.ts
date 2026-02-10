@@ -321,6 +321,48 @@ export class SysMLParser {
     private resolutionCache: Map<string, { hash: number; result: ResolutionResult }> = new Map();
 
     /**
+     * Gate that language providers can await so they don't trigger their own
+     * heavy parse while a centralized parse is already in progress.
+     * Resolves once the current centralized parse completes.
+     */
+    private _parseGate: Promise<void> = Promise.resolve();
+    private _resolveParseGate: (() => void) | null = null;
+
+    /** Signal that a centralized parse is about to begin. */
+    public beginParseGate(): void {
+        if (!this._resolveParseGate) {
+            this._parseGate = new Promise<void>(resolve => {
+                this._resolveParseGate = resolve;
+            });
+        }
+    }
+
+    /** Signal that the centralized parse has finished. */
+    public endParseGate(): void {
+        if (this._resolveParseGate) {
+            this._resolveParseGate();
+            this._resolveParseGate = null;
+        }
+    }
+
+    /** Wait for any in-progress centralized parse to finish. Resolves immediately if idle. */
+    public waitForParse(): Promise<void> {
+        return this._parseGate;
+    }
+
+    /**
+     * Clear all parse and resolution caches.
+     * Returns the number of entries that were cleared.
+     */
+    public clearCache(): { parseEntries: number; resolutionEntries: number } {
+        const parseEntries = this.parseCache.size;
+        const resolutionEntries = this.resolutionCache.size;
+        this.parseCache.clear();
+        this.resolutionCache.clear();
+        return { parseEntries, resolutionEntries };
+    }
+
+    /**
      * Simple string hash function for content comparison
      */
     private hashContent(content: string): number {

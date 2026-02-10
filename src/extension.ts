@@ -12,9 +12,87 @@ import { VisualizationPanel } from './visualization/visualizationPanel';
 
 let modelExplorerProvider: ModelExplorerProvider;
 let parser: SysMLParser;
+let validator: SysMLValidator;
 let outputChannel: vscode.OutputChannel;
 let libraryService: LibraryService;
-let documentChangeDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+let parseDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+let activeParseCancel: vscode.CancellationTokenSource | undefined;
+
+/**
+ * Centralized parse entry point.  Shows a progress notification
+ * **immediately** (before any ANTLR work), gates language providers so they
+ * don't trigger their own parse, and supports cancellation when the user
+ * navigates away or the document is closed.
+ */
+function parseSysMLDocument(document: vscode.TextDocument): void {
+    // Cancel any in-flight parse for a previous file
+    if (parseDebounceTimer) {
+        globalThis.clearTimeout(parseDebounceTimer);
+    }
+    if (activeParseCancel) {
+        activeParseCancel.cancel();
+        activeParseCancel.dispose();
+        activeParseCancel = undefined;
+    }
+
+    const fileName = document.fileName.split('/').pop() || 'file';
+    const cancelSource = new vscode.CancellationTokenSource();
+    activeParseCancel = cancelSource;
+
+    // Open the parser gate so language providers wait for us
+    parser.beginParseGate();
+
+    // Micro-delay (≈0 ms) so that if the user is rapidly clicking we only
+    // keep the very last request, but the notification appears on the next
+    // event-loop turn — far faster than the old 50 ms setTimeout.
+    parseDebounceTimer = setTimeout(async () => {
+        if (cancelSource.token.isCancellationRequested || document.isClosed) {
+            parser.endParseGate();
+            return;
+        }
+
+        try {
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: `Parsing ${fileName}…`,
+                    cancellable: false
+                },
+                async (_progress) => {
+                    // Yield twice so the toast is painted before the sync parse blocks.
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                    await new Promise(resolve => setTimeout(resolve, 0));
+
+                    if (cancelSource.token.isCancellationRequested || document.isClosed) {
+                        return;
+                    }
+
+                    // --- Model explorer update (ANTLR parse + semantic resolution) ---
+                    outputChannel?.appendLine(`parseSysMLDocument: loading ${fileName}`);
+                    await modelExplorerProvider.loadDocument(document, cancelSource.token);
+
+                    if (cancelSource.token.isCancellationRequested || document.isClosed) {
+                        return;
+                    }
+
+                    // --- Validation (reuses cached parse result) ---
+                    if (vscode.workspace.getConfiguration('sysml').get('validation.enabled')) {
+                        validator.validate(document);
+                    }
+                }
+            );
+        } finally {
+            // Always release the gate so providers unblock
+            parser.endParseGate();
+
+            if (activeParseCancel === cancelSource) {
+                activeParseCancel = undefined;
+            }
+            cancelSource.dispose();
+        }
+    }, 0);
+}
 
 export function activate(context: vscode.ExtensionContext) {
     // Create dedicated output channel for logging
@@ -38,7 +116,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     parser = new SysMLParser();
     const formatter = new SysMLFormatter();
-    const validator = new SysMLValidator(parser);
+    validator = new SysMLValidator(parser);
 
     modelExplorerProvider = new ModelExplorerProvider(parser);
     vscode.window.registerTreeDataProvider('sysmlModelExplorer', modelExplorerProvider);
@@ -94,11 +172,22 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('sysml.showVisualizer', () => {
+        vscode.commands.registerCommand('sysml.showVisualizer', async () => {
             const editor = vscode.window.activeTextEditor;
             if (editor && editor.document.languageId === 'sysml') {
-                // Default to structural view for SysML v2.0 compliance
-                VisualizationPanel.createOrShow(context.extensionUri, parser, editor.document);
+                const fileName = editor.document.fileName.split('/').pop() || 'file';
+                await vscode.window.withProgress(
+                    {
+                        location: vscode.ProgressLocation.Notification,
+                        title: `Parsing ${fileName}...`,
+                        cancellable: false
+                    },
+                    async () => {
+                        // Yield so the progress notification renders before the sync parse blocks
+                        await new Promise(resolve => setTimeout(resolve, 0));
+                        VisualizationPanel.createOrShow(context.extensionUri, parser, editor.document);
+                    }
+                );
             }
         })
     );
@@ -107,6 +196,17 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('sysml.refreshModelTree', () => {
             modelExplorerProvider.refresh();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('sysml.clearCache', () => {
+            const { parseEntries, resolutionEntries } = parser.clearCache();
+            const total = parseEntries + resolutionEntries;
+            vscode.window.showInformationMessage(
+                `SysML cache cleared (${total} ${total === 1 ? 'entry' : 'entries'} removed)`
+            );
+            outputChannel.appendLine(`[Cache] Cleared ${parseEntries} parse + ${resolutionEntries} resolution entries`);
         })
     );
 
@@ -458,32 +558,27 @@ export function activate(context: vscode.ExtensionContext) {
         outputChannel.appendLine('Setting sysml.modelLoaded context to true (activation)');
         vscode.commands.executeCommand('setContext', 'sysml.modelLoaded', true);
         outputChannel.appendLine('Calling modelExplorerProvider.loadDocument (activation)');
-        modelExplorerProvider.loadDocument(activeEditor.document);
+        parseSysMLDocument(activeEditor.document);
     }
 
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(editor => {
             outputChannel.appendLine(`onDidChangeActiveTextEditor: ${editor ? editor.document.fileName : 'none'} (lang: ${editor?.document.languageId ?? 'N/A'})`);
             if (editor && editor.document.languageId === 'sysml') {
-                outputChannel.appendLine('Setting sysml.modelLoaded context to true (editor change)');
                 vscode.commands.executeCommand('setContext', 'sysml.modelLoaded', true);
-                outputChannel.appendLine('Calling modelExplorerProvider.loadDocument (editor change)');
-                modelExplorerProvider.loadDocument(editor.document);
-
-                if (vscode.workspace.getConfiguration('sysml').get('validation.enabled')) {
-                    validator.validate(editor.document);
-                }
+                parseSysMLDocument(editor.document);
             }
         })
     );
 
-    // Validate on open so diagnostics/squiggles appear without requiring an edit.
+    // Cancel active parse when a document is closed mid-flight
     context.subscriptions.push(
-        vscode.workspace.onDidOpenTextDocument(document => {
-            if (document.languageId === 'sysml') {
-                if (vscode.workspace.getConfiguration('sysml').get('validation.enabled')) {
-                    validator.validate(document);
-                }
+        vscode.workspace.onDidCloseTextDocument(document => {
+            if (document.languageId === 'sysml' && activeParseCancel) {
+                outputChannel.appendLine(`onDidCloseTextDocument: cancelling parse for ${document.fileName.split('/').pop()}`);
+                activeParseCancel.cancel();
+                activeParseCancel.dispose();
+                activeParseCancel = undefined;
             }
         })
     );
@@ -491,17 +586,9 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.workspace.onDidChangeTextDocument(event => {
             if (event.document.languageId === 'sysml') {
-                // Debounce document changes to avoid overwhelming the parser
-                if (documentChangeDebounceTimer) {
-                    globalThis.clearTimeout(documentChangeDebounceTimer);
-                }
-
-                documentChangeDebounceTimer = setTimeout(() => {
-                    modelExplorerProvider.loadDocument(event.document);
-                    if (vscode.workspace.getConfiguration('sysml').get('validation.enabled')) {
-                        validator.validate(event.document);
-                    }
-                }, 50); // 50ms debounce - minimal delay for near-instant updates
+                // Route through the centralized parse path so the progress
+                // notification and cancellation logic are applied consistently.
+                parseSysMLDocument(event.document);
 
                 // Note: Visualization panel only updates on file save for smooth editing
             }
@@ -551,14 +638,16 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Validate all already-open SysML documents on activation
-    // This ensures diagnostics appear immediately without requiring an edit
+    // Validate all already-open SysML documents on activation (deferred so
+    // it doesn't block the notification pipeline for the active document).
     if (vscode.workspace.getConfiguration('sysml').get('validation.enabled')) {
-        vscode.workspace.textDocuments.forEach(document => {
-            if (document.languageId === 'sysml') {
-                validator.validate(document);
-            }
-        });
+        setTimeout(() => {
+            vscode.workspace.textDocuments.forEach(document => {
+                if (document.languageId === 'sysml') {
+                    validator.validate(document);
+                }
+            });
+        }, 2000);
     }
 }
 
