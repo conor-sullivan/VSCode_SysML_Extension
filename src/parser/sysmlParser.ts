@@ -447,6 +447,20 @@ export class SysMLParser {
             // Parse with ANTLR - include errors for diagnostics
             const elements = antlr.parseDocument(document, false); // Exclude error elements for cleaner output
 
+            // Debug: trace unnamed connections after ANTLR parse
+            const findUnnamedConnections = (els: SysMLElement[], depth = 0): void => {
+                for (const el of els) {
+                    if (el.name === 'unnamed' && el.type === 'connection') {
+                        // eslint-disable-next-line no-console
+                        console.log(`[parse] Connection at line ${el.range?.start?.line} is unnamed after ANTLR parse`);
+                    }
+                    if (el.children) {
+                        findUnnamedConnections(el.children, depth + 1);
+                    }
+                }
+            };
+            findUnnamedConnections(elements);
+
             // Update internal state
             this.updateElementCache(elements);
             this.relationships = antlr.getRelationships();
@@ -637,6 +651,12 @@ export class SysMLParser {
      */
     convertEnrichedToSysMLElements(enriched: EnrichedElement[]): SysMLElement[] {
         return enriched.map(element => {
+            // Debug: trace unnamed connections
+            if (element.name === 'unnamed' && element.type === 'connection') {
+                // eslint-disable-next-line no-console
+                console.log(`[convert] Connection at line ${element.range?.start?.line} is unnamed in enriched`);
+            }
+
             // Debug: Check if enriched element has doc
             if (element.attributes && element.attributes.has('doc')) {
                 // console.log(`[CONVERT] ${element.name} (${element.type}) has doc in enriched: ${element.attributes.get('doc')?.toString().substring(0, 50)}...`);

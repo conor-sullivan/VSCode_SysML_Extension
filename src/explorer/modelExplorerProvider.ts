@@ -20,6 +20,16 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<vscode.Tre
         this._onDidChangeTreeData.fire();
     }
 
+    /**
+     * Clear the model explorer when no SysML files are open
+     */
+    clear(): void {
+        this.currentDocument = undefined;
+        this.pendingDocument = undefined;
+        this.rootElements = [];
+        this._onDidChangeTreeData.fire();
+    }
+
     async loadDocument(document: vscode.TextDocument, cancellationToken?: vscode.CancellationToken): Promise<void> {
         this.currentDocument = document;
 
@@ -203,6 +213,12 @@ export class ModelTreeItem extends vscode.TreeItem {
                 : vscode.TreeItemCollapsibleState.None
         );
 
+        // Debug: trace unnamed elements
+        if (element.name === 'unnamed' && element.type === 'connection') {
+            // eslint-disable-next-line no-console
+            console.log(`[TreeView] Connection at line ${element.range?.start?.line} showing as unnamed`);
+        }
+
         // Enhanced tooltip with more information
         const partType = element.attributes.get('partType') as string;
         const tooltipSuffix = partType ? ` : ${partType}` : (element.children.length > 0 ? ` (${element.children.length} children)` : '');
@@ -239,6 +255,8 @@ export class ModelTreeItem extends vscode.TreeItem {
             'reference': '🔗 ',
             'connection': '🔀 ',
             'interface': '🔌 ',
+            'flow def': '🔀 ',
+            'flowProperty': '🔀 ',
             'item': '📋 ',
             'enum': '📚 ',
             'datatype': '🔢 ',
@@ -263,6 +281,8 @@ export class ModelTreeItem extends vscode.TreeItem {
             'reference': 'references',
             'connection': 'link',
             'interface': 'symbol-interface',
+            'flow def': 'link',
+            'flowProperty': 'arrow-both',
             'item': 'symbol-struct',
             'enum': 'symbol-enum',
             'datatype': 'symbol-field',

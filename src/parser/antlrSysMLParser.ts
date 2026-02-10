@@ -24,7 +24,6 @@ export class ANTLRSysMLParser {
         this.cachedLexer = new SysMLv2Lexer(new CharStream(''));
         const tokenStream = new CommonTokenStream(this.cachedLexer);
         this.cachedParser = new SysMLv2(tokenStream);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (this.cachedParser as any)._interp.predictionMode = PredictionMode.SLL;
     }
 
@@ -75,7 +74,6 @@ export class ANTLRSysMLParser {
             // Reuse cached lexer/parser to preserve DFA prediction cache
             const lexer = new SysMLv2Lexer(inputStream);
             const tokenStream = new CommonTokenStream(lexer);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const parser = this.cachedParser;
             (parser as any).setTokenStream(tokenStream);
             parser.reset();
@@ -824,8 +822,13 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
             }
             // Fallback: get text and check if it's a valid name
             const text = idCtx.getText?.() || '';
-            if (text && !KEYWORDS.has(text.toLowerCase()) && /^[a-zA-Z_]/.test(text)) {
-                return stripQuotes(text) || null;
+            if (text) {
+                const stripped = stripQuotes(text);
+                // Quoted names (e.g., 'first') are always valid even if they match keywords
+                const isQuoted = text.startsWith("'") || text.startsWith('"');
+                if (stripped && (isQuoted || (!KEYWORDS.has(stripped.toLowerCase()) && /^[a-zA-Z_]/.test(stripped)))) {
+                    return stripped;
+                }
             }
             return null;
         };
@@ -883,6 +886,188 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
                     }
                 }
             }
+        }
+
+        // Strategy 4: For elements with redefines/subsets but no name, generate synthetic name
+        // This handles: "part redefines engine" → "redefines engine"
+        // "attribute :>> fuelMass" → "redefines fuelMass"
+        const findContext = (node: any, targetName: string, depth: number): any => {
+            if (depth > 8 || !node) return null;
+            if (node?.constructor?.name === targetName) return node;
+            if (node?.children) {
+                for (const child of node.children) {
+                    const result = findContext(child, targetName, depth + 1);
+                    if (result) return result;
+                }
+            }
+            return null;
+        };
+
+        // Check for ownedRedefinition (handles :>> shorthand and explicit redefines)
+        const ownedRedef = findContext(ctx, 'OwnedRedefinitionContext', 0);
+        if (ownedRedef) {
+            const redefText = ownedRedef.getText?.();
+            if (redefText) {
+                // Extract the last identifier from qualified name chains like "Vehicle::cargoMass"
+                const parts = redefText.split('::');
+                const lastPart = parts[parts.length - 1];
+                if (lastPart && !KEYWORDS.has(lastPart.toLowerCase())) {
+                    return `redefines ${lastPart}`;
+                }
+            }
+        }
+
+        // Check for RedefinesContext (explicit "redefines" keyword with target)
+        const redefinesCtx = findContext(ctx, 'RedefinesContext', 0);
+        if (redefinesCtx) {
+            const redefText = redefinesCtx.getText?.();
+            if (redefText) {
+                // Extract target after "redefines" or ":>>"
+                const match = redefText.match(/(?:redefines|:>>)(.+)/i);
+                if (match && match[1]) {
+                    const parts = match[1].split('::');
+                    const lastPart = parts[parts.length - 1].trim();
+                    if (lastPart && !KEYWORDS.has(lastPart.toLowerCase())) {
+                        return `redefines ${lastPart}`;
+                    }
+                }
+            }
+        }
+
+        // Check for OwnedSubsettingContext
+        const subsettingCtx = findContext(ctx, 'OwnedSubsettingContext', 0);
+        if (subsettingCtx) {
+            const subText = subsettingCtx.getText?.();
+            if (subText) {
+                const parts = subText.split('::');
+                const lastPart = parts[parts.length - 1];
+                if (lastPart && !KEYWORDS.has(lastPart.toLowerCase())) {
+                    return `subsets ${lastPart}`;
+                }
+            }
+        }
+
+        // Strategy 5: Generate synthetic names for connections, flows, allocations, transitions
+        // These are often anonymous but have structural endpoints we can use
+        const ctxTypeName = ctx?.constructor?.name || '';
+
+        // For ConnectionUsageContext: "connect source to target" → "source → target"
+        if (ctxTypeName === 'ConnectionUsageContext') {
+            // DEBUG: Log when we enter this code path (v2 marker)
+            const connectorPartCtx = ctx.connectorPart?.();
+            if (connectorPartCtx) {
+                const binaryCtx = connectorPartCtx.binaryConnectorPart?.();
+                if (binaryCtx) {
+                    const endMembers = binaryCtx.connectorEndMember_list?.() || binaryCtx.connectorEndMember?.();
+                    if (Array.isArray(endMembers) && endMembers.length >= 2) {
+                        const source = endMembers[0].getText?.() || '';
+                        const target = endMembers[1].getText?.() || '';
+                        if (source && target) {
+                            return `${source} → ${target}`;
+                        }
+                    }
+                }
+            }
+        }
+
+        // For FlowUsageContext: "flow source to target" → "source → target"
+        if (ctxTypeName === 'FlowUsageContext') {
+            // FlowUsage uses flowDeclaration -> flowEndMember_list
+            const flowDeclCtx = ctx.flowDeclaration?.();
+            if (flowDeclCtx) {
+                const endMembers = flowDeclCtx.flowEndMember_list?.() || flowDeclCtx.flowEndMember?.();
+                if (Array.isArray(endMembers) && endMembers.length >= 2) {
+                    const source = endMembers[0].getText?.() || '';
+                    const target = endMembers[1].getText?.() || '';
+                    if (source && target) {
+                        return `${source} → ${target}`;
+                    }
+                }
+            }
+        }
+
+        // For AllocationUsageContext: "allocate source to target" → "source → target"
+        if (ctxTypeName === 'AllocationUsageContext') {
+            // AllocationUsage uses allocationUsageDeclaration -> connectorPart -> binaryConnectorPart -> connectorEndMember_list
+            const allocDeclCtx = ctx.allocationUsageDeclaration?.();
+            if (allocDeclCtx) {
+                const connectorPartCtx = allocDeclCtx.connectorPart?.();
+                if (connectorPartCtx) {
+                    const binaryCtx = connectorPartCtx.binaryConnectorPart?.();
+                    if (binaryCtx) {
+                        const endMembers = binaryCtx.connectorEndMember_list?.() || binaryCtx.connectorEndMember?.();
+                        if (Array.isArray(endMembers) && endMembers.length >= 2) {
+                            const source = endMembers[0].getText?.() || '';
+                            const target = endMembers[1].getText?.() || '';
+                            if (source && target) {
+                                return `${source} → ${target}`;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // For TransitionUsageContext: "transition initial then off" → "initial → off"
+        // Grammar: TRANSITION (usageDeclaration? FIRST)? featureChainMember ... THEN transitionSuccessionMember
+        if (ctxTypeName === 'TransitionUsageContext') {
+            // Source is in featureChainMember, target is in transitionSuccessionMember
+            const sourceCtx = ctx.featureChainMember?.();
+            const targetCtx = ctx.transitionSuccessionMember?.();
+            if (sourceCtx && targetCtx) {
+                const source = sourceCtx.getText?.() || '';
+                const target = targetCtx.getText?.() || '';
+                if (source && target) {
+                    return `${source} → ${target}`;
+                }
+            }
+        }
+
+        // For ConstraintUsageContext: try to extract meaningful constraint expression
+        // Grammar: CONSTRAINT constraintUsageDeclaration calculationBody
+        if (ctxTypeName === 'ConstraintUsageContext') {
+            // Use calculationBody which contains the constraint expression
+            const bodyCtx = ctx.calculationBody?.() || ctx.usageBody?.() || ctx.definitionBody?.();
+            if (bodyCtx) {
+                const fullText = bodyCtx.getText?.() || '';
+                // Extract the expression inside { } - limit to reasonable length
+                const match = fullText.match(/^\{(.{1,50})/);
+                if (match && match[1]) {
+                    const expr = match[1].replace(/\}.*$/, '').trim();
+                    if (expr) {
+                        return `assert ${expr}${expr.length > 40 ? '...' : ''}`;
+                    }
+                }
+            }
+        }
+
+        // For AssertConstraintUsageContext: "assert constraint { expr }" → "assert expr"
+        if (ctxTypeName === 'AssertConstraintUsageContext') {
+            const fullText = ctx.getText?.() || '';
+            // Extract expression from assert constraint { ... }
+            const match = fullText.match(/\{([^}]+)\}/);
+            if (match && match[1]) {
+                const expr = match[1].trim();
+                const preview = expr.length > 40 ? `${expr.substring(0, 40)}...` : expr;
+                return `assert {${preview}}`;
+            }
+        }
+
+        // Strategy 6: Provide descriptive fallback for anonymous use-case related elements
+        // These are elements like "subject ;" or "actor ;" that serve as placeholders
+        const anonymousTypeMap: Record<string, string> = {
+            'SubjectUsageContext': '(anonymous subject)',
+            'ActorUsageContext': '(anonymous actor)',
+            'StakeholderUsageContext': '(anonymous stakeholder)',
+            'ObjectiveRequirementUsageContext': '(anonymous objective)',
+            'FrameConcernUsageContext': '(anonymous concern)',
+            'ConcernDefinitionContext': '(anonymous concern)',
+            'RenderingUsageContext': '(anonymous rendering)',
+            'ViewUsageContext': '(anonymous view)',
+            'ViewpointUsageContext': '(anonymous viewpoint)',
+        };
+        if (ctxTypeName in anonymousTypeMap) {
+            return anonymousTypeMap[ctxTypeName];
         }
 
         return 'unnamed';
@@ -1427,6 +1612,11 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
             // Silently continue
         }
 
+        // Generate a descriptive name for anonymous transitions
+        if (element.name === 'unnamed' && fromState && toState) {
+            element.name = `${fromState} → ${toState}`;
+        }
+
         this.visitChildren(ctx);
     }
 
@@ -1569,12 +1759,42 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
             if (fromAttr && toAttr) {
                 element.attributes.set('from', fromAttr);
                 element.attributes.set('to', toAttr);
+
+                // Generate meaningful name for anonymous interface usages
+                if (element.name === 'unnamed') {
+                    element.name = `${fromAttr} ↔ ${toAttr}`;
+                }
+            }
+        }
+
+        // Fallback: extract endpoints directly from ANTLR context for
+        // "interface connect A to B;" syntax where no connect children are created
+        if (element.name === 'unnamed') {
+            try {
+                const declCtx = ctx.interfaceUsageDeclaration?.();
+                const partCtx = declCtx?.interfacePart?.();
+                const binaryCtx = partCtx?.binaryInterfacePart?.();
+                const ends = binaryCtx?.interfaceEndMember_list?.();
+                if (ends && ends.length >= 2) {
+                    const fromRef = this.extractQualifiedName(ends[0]?.interfaceEnd?.()?.ownedReferenceSubsetting?.()) || 'unknown';
+                    const toRef = this.extractQualifiedName(ends[1]?.interfaceEnd?.()?.ownedReferenceSubsetting?.()) || 'unknown';
+                    element.attributes.set('from', fromRef);
+                    element.attributes.set('to', toRef);
+                    element.name = `${fromRef} ↔ ${toRef}`;
+                }
+            } catch {
+                // Fallback: extract from raw text
+                const fullText = ctx.getText?.() || '';
+                const match = fullText.match(/connect([a-zA-Z0-9_.:']+)to([a-zA-Z0-9_.:']+)/);
+                if (match) {
+                    element.name = `${match[1]} ↔ ${match[2]}`;
+                }
             }
         }
     }
 
     visitConstraintDefinition(ctx: any): void {
-        const element = this.createElement('constraint', ctx);
+        const element = this.createElement('constraint def', ctx);
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
@@ -1582,6 +1802,26 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
 
     visitConstraintUsage(ctx: any): void {
         const element = this.createElement('constraint', ctx);
+
+        // Generate a preview name for anonymous constraints
+        if (element.name === 'unnamed') {
+            try {
+                const text = ctx.getText?.() || '';
+                // Extract constraint expression between { }
+                const match = text.match(/\{([^}]+)\}/);
+                if (match) {
+                    let expr = match[1].trim();
+                    // Truncate long expressions
+                    if (expr.length > 30) {
+                        expr = `${expr.substring(0, 30)}...`;
+                    }
+                    element.name = `{${expr}}`;
+                }
+            } catch {
+                // Keep unnamed
+            }
+        }
+
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
@@ -1649,15 +1889,18 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
 
         // Try to extract inline connection syntax using grammar tree
         // connectionUsage: ... CONNECT connectorPart ... which has binaryConnectorPart: connectorEndMember TO connectorEndMember
+        let sourceRef = '';
+        let targetRef = '';
         try {
             const connectorPartCtx = ctx.connectorPart?.();
             if (connectorPartCtx) {
                 const binaryCtx = connectorPartCtx.binaryConnectorPart?.();
                 if (binaryCtx) {
-                    const endMembers = binaryCtx.connectorEndMember?.();
+                    // Use _list accessor for repeated rule elements
+                    const endMembers = binaryCtx.connectorEndMember_list?.() || binaryCtx.connectorEndMember?.();
                     if (Array.isArray(endMembers) && endMembers.length >= 2) {
-                        const sourceRef = endMembers[0].getText?.() || '';
-                        const targetRef = endMembers[1].getText?.() || '';
+                        sourceRef = endMembers[0].getText?.() || '';
+                        targetRef = endMembers[1].getText?.() || '';
                         if (sourceRef && targetRef) {
                             element.attributes.set('from', sourceRef);
                             element.attributes.set('to', targetRef);
@@ -1680,15 +1923,24 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
             const fullText = ctx.getText?.() || '';
             const inlineConnectMatch = fullText.match(/connect\s*(?:\[[^\]]*\])?\s*([a-zA-Z0-9_.]+)\s*to\s*(?:\[[^\]]*\])?\s*([a-zA-Z0-9_.]+)/i);
             if (inlineConnectMatch) {
-                element.attributes.set('from', inlineConnectMatch[1]);
-                element.attributes.set('to', inlineConnectMatch[2]);
+                sourceRef = inlineConnectMatch[1];
+                targetRef = inlineConnectMatch[2];
+                element.attributes.set('from', sourceRef);
+                element.attributes.set('to', targetRef);
                 this.relationships.push({
                     type: 'connection',
-                    source: inlineConnectMatch[1],
-                    target: inlineConnectMatch[2],
+                    source: sourceRef,
+                    target: targetRef,
                     name: element.name || 'connect'
                 });
             }
+        }
+
+        // Generate meaningful name for anonymous connections
+        if (element.name === 'unnamed' && element.attributes.has('from') && element.attributes.has('to')) {
+            const from = element.attributes.get('from') as string;
+            const to = element.attributes.get('to') as string;
+            element.name = `${from} → ${to}`;
         }
 
         // After visiting children (which populates 'end' elements), extract endpoints
@@ -1720,6 +1972,12 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
                     target: targetRef,
                     name: element.name || 'connect'
                 });
+
+                // Also name the connection from its end endpoints if still unnamed
+                // This handles derivation connections: #derivation connection { end X; end Y; }
+                if (element.name === 'unnamed') {
+                    element.name = `${sourceRef} → ${targetRef}`;
+                }
             }
         }
     }
@@ -1755,7 +2013,171 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
             }
         }
 
-        this.createElement('end', ctx, attributes);
+        // Also try ownedReferenceSubsetting for ::> syntax (derivation connections)
+        // Grammar: connectorEnd: (name (::>|references))? ownedReferenceSubsetting
+        if (!attributes.has('targetRef')) {
+            try {
+                // Get the connectorEnd child first
+                const connectorEndCtx = ctx.connectorEnd?.() || ctx;
+
+                // Try getting ownedReferenceSubsetting
+                const refSubsettingCtx = connectorEndCtx.ownedReferenceSubsetting?.();
+                if (refSubsettingCtx) {
+                    const text = refSubsettingCtx.getText?.() || '';
+                    if (text) {
+                        // Clean up - remove any leading punctuation
+                        const reference = text.replace(/^[:.>]+/, '').trim();
+                        attributes.set('targetRef', reference);
+                        attributes.set('references', reference);
+                    }
+                }
+
+                // Fallback: try just getting the whole text and extracting the reference
+                if (!attributes.has('targetRef')) {
+                    const fullText = ctx.getText?.() || '';
+                    // Pattern: end #name ::> some.reference
+                    const match = fullText.match(/::>\s*([a-zA-Z0-9_.\[\]]+)/);
+                    if (match) {
+                        attributes.set('targetRef', match[1]);
+                        attributes.set('references', match[1]);
+                    }
+                }
+            } catch {
+                // Silently continue
+            }
+        }
+
+        const element = this.createElement('end', ctx, attributes);
+
+        // Give the end element a meaningful name from its targetRef
+        const targetRef = attributes.get('targetRef') as string;
+        if (element.name === 'unnamed' && targetRef) {
+            element.name = `end: ${targetRef}`;
+        }
+    }
+
+    visitEndFeatureUsage(ctx: any): void {
+        // Handle explicit 'end' declarations in connection/flow/interface bodies
+        // Syntax: end #name ::> qualified.reference;
+        // This is used for derivation connections and similar block-style connections
+        const isInConnection = this.parentStack.some(p => p.type === 'connection');
+
+        if (!isInConnection) {
+            // Not inside a connection, just visit children normally
+            this.visitChildren(ctx);
+            return;
+        }
+
+        const attributes = new Map<string, any>();
+
+        // Try to extract the target reference from the full text
+        // Pattern: end #name ::> qualified.reference
+        const fullText = ctx.getText?.() || '';
+
+        // Try ::> pattern first (ownedReferenceSubsetting)
+        let match = fullText.match(/::>\s*([a-zA-Z0-9_.\[\]]+)/);
+        if (match) {
+            attributes.set('targetRef', match[1]);
+            attributes.set('references', match[1]);
+        }
+
+        // Also try :> pattern (ownedSubsetting)
+        if (!attributes.has('targetRef')) {
+            match = fullText.match(/:>\s*([a-zA-Z0-9_.\[\]]+)/);
+            if (match) {
+                attributes.set('targetRef', match[1]);
+                attributes.set('references', match[1]);
+            }
+        }
+
+        // Also try : pattern (typing)
+        if (!attributes.has('targetRef')) {
+            match = fullText.match(/:\s*([a-zA-Z0-9_.\[\]]+)/);
+            if (match) {
+                attributes.set('targetRef', match[1]);
+                attributes.set('references', match[1]);
+            }
+        }
+
+        const element = this.createElement('end', ctx, attributes);
+
+        // Give the end element a meaningful name from its targetRef
+        const targetRef = attributes.get('targetRef') as string;
+        if (element.name === 'unnamed' && targetRef) {
+            element.name = `end: ${targetRef}`;
+        }
+    }
+
+    visitExtendedUsage(ctx: any): void {
+        // Handle 'end' statements that are parsed as ExtendedUsage
+        // Grammar structure: ExtendedUsageContext has children:
+        //   [0] UnextendedUsagePrefixContext with text "end"
+        //   [1] UsageExtensionKeywordContext with text "#name"
+        //   [2] UsageContext with "::>..." or other subsetting
+
+        const children = ctx.children || [];
+        if (children.length === 0) {
+            this.visitChildren(ctx);
+            return;
+        }
+
+        // Check if first child is an 'end' prefix
+        const firstChild = children[0];
+        const prefixText = firstChild?.getText?.() || '';
+
+        if (prefixText.toLowerCase() !== 'end') {
+            // Not an 'end' statement, just visit children
+            this.visitChildren(ctx);
+            return;
+        }
+
+        // This is an 'end' statement - check if we're inside a connection
+        const isInConnection = this.parentStack.some(p => p.type === 'connection');
+        if (!isInConnection) {
+            this.visitChildren(ctx);
+            return;
+        }
+
+        const attributes = new Map<string, any>();
+
+        // Get name from UsageExtensionKeywordContext (second child, e.g., "#original")
+        if (children.length > 1) {
+            const nameChild = children[1];
+            const nameText = nameChild?.getText?.() || '';
+            // Remove leading # if present
+            if (nameText.startsWith('#')) {
+                attributes.set('shortname', nameText.substring(1));
+            } else if (nameText) {
+                attributes.set('shortname', nameText);
+            }
+        }
+
+        // Get targetRef from the full text (::> or :> pattern)
+        const fullText = ctx.getText?.() || '';
+        let match = fullText.match(/::>\s*([a-zA-Z0-9_.\[\]]+)/);
+        if (match) {
+            attributes.set('targetRef', match[1]);
+            attributes.set('references', match[1]);
+        } else {
+            match = fullText.match(/:>\s*([a-zA-Z0-9_.\[\]]+)/);
+            if (match) {
+                attributes.set('targetRef', match[1]);
+                attributes.set('references', match[1]);
+            }
+        }
+
+        const element = this.createElement('end', ctx, attributes);
+
+        // Give the end element a name from shortname or targetRef
+        const shortname = attributes.get('shortname') as string;
+        const targetRef = attributes.get('targetRef') as string;
+        if (element.name === 'unnamed') {
+            if (shortname) {
+                element.name = `end #${shortname}`;
+            } else if (targetRef) {
+                element.name = `end: ${targetRef}`;
+            }
+        }
     }
 
     visitOwnedRedefinition(ctx: any): void {
@@ -1820,7 +2242,52 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
             }
         }
 
-        this.createElement('flowProperty', ctx, attributes);
+        const element = this.createElement('flowProperty', ctx, attributes);
+
+        // Generate meaningful name for anonymous flows
+        if (element.name === 'unnamed') {
+            const fullText = ctx.getText?.() || '';
+            // Match patterns like: flow source to target or flow of Type from source to target
+            const flowMatch = fullText.match(/flow\s+(?:of\s+\w+\s+)?(?:from\s+)?([a-zA-Z0-9_.]+)\s+to\s+([a-zA-Z0-9_.]+)/i);
+            if (flowMatch) {
+                element.name = `${flowMatch[1]} → ${flowMatch[2]}`;
+                element.attributes.set('from', flowMatch[1]);
+                element.attributes.set('to', flowMatch[2]);
+            } else {
+                // Fallback: extract "flow of Type" (no from/to) from ANTLR context
+                try {
+                    const declCtx = ctx.flowDeclaration?.();
+                    if (declCtx) {
+                        // Navigate: flowDeclaration → flowPayloadFeatureMember → ... → ownedFeatureTyping → qualifiedName
+                        const payloadMember = declCtx.flowPayloadFeatureMember?.();
+                        const payloadFeature = payloadMember?.flowPayloadFeature?.()?.payloadFeature?.();
+                        const typingCtx = payloadFeature?.ownedFeatureTyping?.();
+                        const qnText = typingCtx?.getText?.();
+                        if (qnText) {
+                            element.name = `flow of ${qnText}`;
+                            element.attributes.set('flowType', qnText);
+                        }
+                    }
+                } catch {
+                    // Ignore ANTLR extraction errors
+                }
+            }
+            // Final regex fallback on getText() which strips whitespace
+            if (element.name === 'unnamed') {
+                const ofMatch = fullText.match(/^flowof([a-zA-Z0-9_.:' -]+)/i);
+                if (ofMatch) {
+                    element.name = `flow of ${ofMatch[1]}`;
+                }
+            }
+        }
+    }
+
+    visitFlowDefinition(ctx: any): void {
+        const element = this.createElement('flow def', ctx);
+        element.attributes.set('isDefinition', 'true');
+        this.parentStack.push(element);
+        this.visitChildren(ctx);
+        this.parentStack.pop();
     }
 
     visitInteraction(ctx: any): void {
@@ -1874,8 +2341,108 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
     // Note: visitCommentElement removed - merged into visitComment below
 
     visitComment(ctx: any): void {
-        this.createElement('comment', ctx);
+        // Extract comment text to use as a meaningful name
+        const commentText = this.extractCommentText(ctx);
+        const attributes = new Map<string, any>();
+        if (commentText) {
+            attributes.set('text', commentText);
+        }
+
+        // Create element with custom name extraction for comments
+        const name = this.getCommentName(ctx, commentText);
+        const range = this.getRange(ctx);
+
+        const element: SysMLElement = {
+            type: 'comment',
+            name,
+            range,
+            children: [],
+            attributes,
+            relationships: []
+        };
+
+        // Add to parent or root
+        if (this.parentStack.length > 0) {
+            this.parentStack[this.parentStack.length - 1].children.push(element);
+        } else {
+            this.rootElements.push(element);
+        }
+
+        this.parentStack.push(element);
         this.visitChildren(ctx);
+        this.parentStack.pop();
+    }
+
+    /**
+     * Extract the comment text from a comment context.
+     */
+    private extractCommentText(ctx: any): string {
+        try {
+            // Look for REGULAR_COMMENT token
+            if (ctx.REGULAR_COMMENT && typeof ctx.REGULAR_COMMENT === 'function') {
+                const commentToken = ctx.REGULAR_COMMENT();
+                if (commentToken?.text) {
+                    let text = commentToken.text;
+                    // Remove /* and */ markers
+                    text = text.replace(/^\/\*+/, '').replace(/\*+\/$/, '');
+                    // Clean up leading * on each line and whitespace
+                    text = text.split('\n')
+                        .map((line: string) => line.replace(/^\s*\*\s?/, '').trim())
+                        .filter((line: string) => line.length > 0)
+                        .join(' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    return text;
+                }
+            }
+
+            // Fallback: try to get text from the whole context
+            const fullText = ctx.getText?.() || '';
+            const blockMatch = fullText.match(/\/\*[\s\S]*?\*\//);
+            if (blockMatch) {
+                let text = blockMatch[0];
+                text = text.replace(/^\/\*+/, '').replace(/\*+\/$/, '');
+                text = text.split('\n')
+                    .map((line: string) => line.replace(/^\s*\*\s?/, '').trim())
+                    .filter((line: string) => line.length > 0)
+                    .join(' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                return text;
+            }
+        } catch {
+            // Ignore errors in comment extraction
+        }
+        return '';
+    }
+
+    /**
+     * Get a meaningful name for a comment element.
+     * Tries to use the identifier if present, otherwise creates a preview from the comment text.
+     */
+    private getCommentName(ctx: any, commentText: string): string {
+        // First try to get an explicit identifier
+        const explicitName = this.getElementName(ctx);
+        if (explicitName && explicitName !== 'unnamed') {
+            return explicitName;
+        }
+
+        // Use a truncated version of the comment text as the name
+        if (commentText) {
+            const maxLength = 40;
+            if (commentText.length <= maxLength) {
+                return commentText;
+            }
+            // Truncate at word boundary
+            const truncated = commentText.substring(0, maxLength);
+            const lastSpace = truncated.lastIndexOf(' ');
+            if (lastSpace > maxLength * 0.6) {
+                return `${truncated.substring(0, lastSpace)}...`;
+            }
+            return `${truncated}...`;
+        }
+
+        return '(comment)';
     }
 
     // Note: visitDocElement removed - merged into visitDocumentation below
@@ -1971,6 +2538,16 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
 
     visitItemUsage(ctx: any): void {
         const element = this.createElement('item', ctx);
+
+        // If unnamed, try to extract value binding (e.g., "in item = providePower.fuelCmd;")
+        if (element.name === 'unnamed') {
+            const fullText = ctx.getText?.() || '';
+            const valueMatch = fullText.match(/=\s*([a-zA-Z_][a-zA-Z0-9_.]*)/);
+            if (valueMatch) {
+                element.name = `item = ${valueMatch[1]}`;
+            }
+        }
+
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
@@ -2016,6 +2593,45 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
+
+        // Try to extract allocation endpoints from grammar
+        // allocation: allocate qualifiedName to qualifiedName;
+        let qualifiedNames;
+        try {
+            qualifiedNames = ctx.qualifiedName ? ctx.qualifiedName() : [];
+        } catch {
+            qualifiedNames = [];
+        }
+        const qnArray = Array.isArray(qualifiedNames) ? qualifiedNames : (qualifiedNames ? [qualifiedNames] : []);
+
+        if (qnArray.length >= 2) {
+            const source = qnArray[0] && typeof qnArray[0].getText === 'function' ? qnArray[0].getText() : '';
+            const target = qnArray[1] && typeof qnArray[1].getText === 'function' ? qnArray[1].getText() : '';
+
+            if (source && target) {
+                element.attributes.set('from', source);
+                element.attributes.set('to', target);
+
+                // Generate meaningful name for anonymous allocations
+                if (element.name === 'unnamed') {
+                    element.name = `${source} → ${target}`;
+                }
+            }
+        }
+
+        // Fallback: try to extract from raw text
+        if (element.name === 'unnamed') {
+            const fullText = ctx.getText?.() || '';
+            // Match patterns like: allocate source to target
+            const allocateMatch = fullText.match(/allocate\s+([a-zA-Z0-9_.:]+)\s+to\s+([a-zA-Z0-9_.:]+)/i);
+            if (allocateMatch) {
+                const source = allocateMatch[1];
+                const target = allocateMatch[2];
+                element.attributes.set('from', source);
+                element.attributes.set('to', target);
+                element.name = `${source} → ${target}`;
+            }
+        }
     }
 
     visitMetadataDefinition(ctx: any): void {
@@ -2047,12 +2663,54 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
         if (isConstraint) {
             // Create a require constraint element
             const element = this.createElement('require constraint', ctx);
+
+            // Generate meaningful name for anonymous require constraints
+            if (element.name === 'unnamed') {
+                // Try to extract the constraint expression
+                const exprMatch = fullText.match(/\{([^}]*)\}/);
+                if (exprMatch) {
+                    const expr = exprMatch[1].trim();
+                    const preview = expr.length > 25 ? `${expr.substring(0, 25)}...` : expr;
+                    element.name = `{${preview}}`;
+                } else {
+                    // Try to get referenced constraint name (getText() strips whitespace)
+                    const refMatch = fullText.match(/^requireconstraint([a-zA-Z_][a-zA-Z0-9_]*)/i);
+                    if (refMatch) {
+                        element.name = `require: ${refMatch[1]}`;
+                    }
+                }
+            }
+
             this.parentStack.push(element);
             this.visitChildren(ctx);
             this.parentStack.pop();
         } else {
             // Create a require reference element
             const element = this.createElement('require', ctx);
+
+            // Generate meaningful name for anonymous require references
+            // Note: getText() strips whitespace, so don't require \s+ between 'require' and name
+            if (element.name === 'unnamed') {
+                // Try ANTLR context first: requirementConstraintUsage → ownedReferenceSubsetting → qualifiedName
+                try {
+                    const usageCtx = ctx.requirementConstraintUsage?.();
+                    const refSubCtx = usageCtx?.ownedReferenceSubsetting?.();
+                    const qnText = this.extractQualifiedName(refSubCtx);
+                    if (qnText) {
+                        element.name = `require: ${qnText}`;
+                    }
+                } catch {
+                    // ANTLR extraction failed, will fall back to regex below
+                }
+            }
+            // Fallback: regex on getText() — handles both unquoted and quoted names
+            if (element.name === 'unnamed') {
+                const refMatch = fullText.match(/^require([a-zA-Z_'][a-zA-Z0-9_.:' -]*)/i);
+                if (refMatch) {
+                    element.name = `require: ${refMatch[1]}`;
+                }
+            }
+
             this.parentStack.push(element);
             this.visitChildren(ctx);
             this.parentStack.pop();
@@ -2061,9 +2719,27 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
 
     visitObjectiveRequirementUsage(ctx: any): void {
         const element = this.createElement('objective', ctx);
+
+        // If still unnamed, try to extract type reference (e.g., "objective : MaximizeObjective;")
+        if (element.name === '(anonymous objective)' || element.name === 'unnamed') {
+            const fullText = ctx.getText?.() || '';
+            const typeMatch = fullText.match(/objective\s*:\s*([A-Za-z_][A-Za-z0-9_.]*)/);
+            if (typeMatch) {
+                element.name = `objective: ${typeMatch[1]}`;
+            }
+        }
+
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
+
+        // After visiting children, if still anonymous and has verify children, name from them
+        if ((element.name === '(anonymous objective)' || element.name === 'unnamed') && element.children.length > 0) {
+            const verifyChild = element.children.find(c => c.type === 'verify');
+            if (verifyChild && verifyChild.name !== 'unnamed') {
+                element.name = `objective`;
+            }
+        }
     }
 
     visitStakeholderUsage(ctx: any): void {
@@ -2102,30 +2778,44 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
     visitBindingConnectorAsUsage(ctx: any): void {
         const element = this.createElement('bind', ctx);
 
-        // Get qualified names: bind qn1 = qn2;
-        let qualifiedNames;
+        // Extract bind endpoints from ConnectorEndMember children
+        // Grammar: bind connectorEndMember = connectorEndMember ;
+        let source = '';
+        let target = '';
         try {
-            qualifiedNames = ctx.qualifiedName ? ctx.qualifiedName() : [];
+            const endMembers = ctx.connectorEndMember_list ? ctx.connectorEndMember_list() : [];
+            const endArray = Array.isArray(endMembers) ? endMembers : (endMembers ? [endMembers] : []);
+            if (endArray.length >= 2) {
+                source = endArray[0]?.getText?.() || '';
+                target = endArray[1]?.getText?.() || '';
+            }
         } catch {
-            qualifiedNames = [];
+            // Fall through to text-based extraction
         }
-        const qnArray = Array.isArray(qualifiedNames) ? qualifiedNames : (qualifiedNames ? [qualifiedNames] : []);
 
-        if (qnArray.length >= 2) {
-            const source = qnArray[0] && typeof qnArray[0].getText === 'function' ? qnArray[0].getText() : '';
-            const target = qnArray[1] && typeof qnArray[1].getText === 'function' ? qnArray[1].getText() : '';
+        // Fallback: extract from full text
+        if (!source || !target) {
+            const fullText = ctx.getText?.() || '';
+            const match = fullText.match(/bind\s*(.+?)\s*=\s*(.+?)\s*;/);
+            if (match) {
+                source = match[1].trim();
+                target = match[2].trim();
+            }
+        }
 
-            if (source && target) {
-                element.attributes.set('from', source);
-                element.attributes.set('to', target);
+        if (source && target) {
+            element.attributes.set('from', source);
+            element.attributes.set('to', target);
 
-                // Also add as a relationship for visualization
-                this.relationships.push({
-                    type: 'bind',
-                    source: source,
-                    target: target,
-                    name: element.name || 'bind'
-                });
+            this.relationships.push({
+                type: 'bind',
+                source: source,
+                target: target,
+                name: element.name || 'bind'
+            });
+
+            if (element.name === 'unnamed') {
+                element.name = `${source} = ${target}`;
             }
         }
 
@@ -2161,6 +2851,11 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
                     target: target,
                     name: element.name || 'connect'
                 });
+
+                // Generate meaningful name for anonymous connectors
+                if (element.name === 'unnamed') {
+                    element.name = `${source} → ${target}`;
+                }
             }
         }
         this.visitChildren(ctx);
@@ -2169,16 +2864,51 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
     // Behavioral Constructs
     visitPerformActionUsage(ctx: any): void {
         const element = this.createElement('perform', ctx);
+        let actionName: string | undefined;
         try {
             const qualifiedName = ctx.qualifiedName ? ctx.qualifiedName() : null;
             if (qualifiedName) {
                 const qn = Array.isArray(qualifiedName) ? qualifiedName[0] : qualifiedName;
                 if (qn && typeof qn.getText === 'function') {
-                    element.attributes.set('action', qn.getText());
+                    const name = qn.getText();
+                    actionName = name;
+                    element.attributes.set('action', name);
                 }
             }
         } catch {
             // qualifiedName might not exist - that's ok
+        }
+
+        // Fallback: try ANTLR context tree for action name
+        if (!actionName) {
+            try {
+                const declCtx = ctx.performActionUsageDeclaration?.();
+                const refSubCtx = declCtx?.ownedReferenceSubsetting?.();
+                const qnText = this.extractQualifiedName(refSubCtx);
+                if (qnText) {
+                    actionName = qnText;
+                    element.attributes.set('action', qnText);
+                }
+            } catch {
+                // Ignore errors
+            }
+        }
+
+        // Fallback: try to get action name from full text if qualifiedName failed
+        if (!actionName) {
+            const fullText = ctx.getText?.() || '';
+            // Pattern: perform actionName — handles both unquoted and quoted names
+            const match = fullText.match(/^perform([a-zA-Z_'][a-zA-Z0-9_.:' -]*)/i);
+            if (match && match[1]) {
+                const extractedName = match[1];
+                actionName = extractedName;
+                element.attributes.set('action', extractedName);
+            }
+        }
+
+        // Generate meaningful name for anonymous perform usages
+        if (element.name === 'unnamed' && actionName) {
+            element.name = `perform: ${actionName}`;
         }
 
         // Check if this perform action has a body (inline action definition)
@@ -2207,12 +2937,15 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
 
     visitExhibitStateUsage(ctx: any): void {
         const element = this.createElement('exhibit state', ctx);
+        let stateName: string | undefined;
         try {
             const qualifiedName = ctx.qualifiedName ? ctx.qualifiedName() : null;
             if (qualifiedName) {
                 const qn = Array.isArray(qualifiedName) ? qualifiedName[0] : qualifiedName;
                 if (qn && typeof qn.getText === 'function') {
-                    element.attributes.set('state', qn.getText());
+                    const name = qn.getText();
+                    stateName = name;
+                    element.attributes.set('state', name);
                 }
             }
             const parallelToken = ctx.PARALLEL ? ctx.PARALLEL() : null;
@@ -2222,104 +2955,79 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
         } catch {
             // qualifiedName or PARALLEL might not exist - that's ok
         }
+
+        // Generate meaningful name for anonymous exhibit state usages
+        if (element.name === 'unnamed' && stateName) {
+            element.name = `exhibit: ${stateName}`;
+        }
+
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
     }
 
-    visitEntryActionMember(ctx: any): void {
-        // Check if this is actually an entry action or if ANTLR is misclassifying
-        const contextText = ctx.getText ? ctx.getText() : '';
-
-        // DEBUG: Log first 5 misclassified elements
-        if (this.elements.size < 5) {
-            // Debug logging disabled - no action needed for small element sets
-        }
-
-        let elementType = 'entry';
-
-        // Try to determine the correct element type based on context
-        // Check for state elements FIRST (most specific to least specific)
-        if (contextText.includes('state def ')) {
-            elementType = 'state def';
-        } else if (contextText.match(/\bstate\s+\w+\s*:/)) {
-            // Pattern: state <name> : <type>
-            elementType = 'state';
-        } else if (contextText.includes('transition ')) {
-            elementType = 'transition';
-        } else if (contextText.includes('package ')) {
-            elementType = 'package';
-        } else if (contextText.includes('part def ')) {
-            elementType = 'part def';
-        } else if (contextText.includes('part ')) {
-            elementType = 'part';
-        } else if (contextText.includes('action def ')) {
-            elementType = 'action def';
-        } else if (contextText.includes('action ')) {
-            elementType = 'action';
-        } else if (contextText.includes('requirement def ')) {
-            elementType = 'requirement def';
-        } else if (contextText.includes('requirement ')) {
-            elementType = 'requirement';
-        }
-
-        const element = this.createElement(elementType, ctx);
+    /**
+     * Extracts the action reference name from a stateActionUsage child.
+     * Grammar: (entry|do|exit) stateActionUsage
+     * stateActionUsage contains StatePerformActionUsageContext with action name text.
+     */
+    private extractStateActionName(ctx: any): string | undefined {
         try {
-            const qualifiedName = ctx.qualifiedName ? ctx.qualifiedName() : null;
-            if (qualifiedName) {
-                const qn = Array.isArray(qualifiedName) ? qualifiedName[0] : qualifiedName;
-                if (qn && typeof qn.getText === 'function') {
-                    element.attributes.set('action', qn.getText());
+            const stateAction = ctx.stateActionUsage?.();
+            if (stateAction) {
+                const rawText = stateAction.getText?.() || '';
+                // Strip trailing semicolons and braces, extract just the action name
+                const cleaned = rawText.replace(/[;{}].*$/, '').replace(/^action\s*/, '').trim();
+                if (cleaned && /^[a-zA-Z_]/.test(cleaned)) {
+                    return cleaned;
                 }
             }
         } catch {
-            // Ignore qualifiedName extraction errors - node may not exist in all contexts
-            // Silently handle missing qualifiedName nodes
+            // stateActionUsage may not exist
         }
+        // Fallback: extract from full text
+        const fullText = ctx.getText?.() || '';
+        // Match: entry/do/exit followed by optional 'action' then name
+        const match = fullText.match(/^(?:entry|do|exit)(?:action)?\s*([a-zA-Z_][a-zA-Z0-9_]*)/);
+        return match?.[1];
+    }
+
+    visitEntryActionMember(ctx: any): void {
+        const element = this.createElement('entry', ctx);
+
+        if (element.name === 'unnamed') {
+            const actionName = this.extractStateActionName(ctx);
+            if (actionName) {
+                element.attributes.set('action', actionName);
+                element.name = `entry: ${actionName}`;
+            }
+        }
+
         this.visitChildren(ctx);
     }
 
     visitExitActionMember(ctx: any): void {
         const element = this.createElement('exit', ctx);
-        try {
-            const qualifiedName = ctx.qualifiedName ? ctx.qualifiedName() : null;
-            if (qualifiedName) {
-                const qn = Array.isArray(qualifiedName) ? qualifiedName[0] : qualifiedName;
-                if (qn && typeof qn.getText === 'function') {
-                    element.attributes.set('action', qn.getText());
-                }
+
+        if (element.name === 'unnamed') {
+            const actionName = this.extractStateActionName(ctx);
+            if (actionName) {
+                element.attributes.set('action', actionName);
+                element.name = `exit: ${actionName}`;
             }
-        } catch {
-            // Ignore qualifiedName extraction errors - node may not exist in all contexts
-            // Silently handle missing qualifiedName nodes
         }
+
         this.visitChildren(ctx);
     }
 
     visitDoActionMember(ctx: any): void {
         const element = this.createElement('do', ctx);
 
-        // Safely handle qualifiedName - it could be a method or property
-        let qualifiedName = null;
-        if (ctx.qualifiedName) {
-            if (typeof ctx.qualifiedName === 'function') {
-                try {
-                    qualifiedName = ctx.qualifiedName();
-                } catch {
-                    // qualifiedName() can throw if node doesn't exist
-                }
-            } else {
-                qualifiedName = ctx.qualifiedName;
-            }
-        }
-
-        if (qualifiedName) {
-            const qn = Array.isArray(qualifiedName) ? qualifiedName[0] : qualifiedName;
-            // Safely check if getText exists and is a function
-            if (qn && typeof qn.getText === 'function') {
-                element.attributes.set('action', qn.getText());
-            } else if (qn && typeof qn === 'string') {
-                element.attributes.set('action', qn);
+        if (element.name === 'unnamed') {
+            const actionName = this.extractStateActionName(ctx);
+            if (actionName) {
+                element.attributes.set('action', actionName);
+                element.name = `do: ${actionName}`;
             }
         }
 
@@ -2427,6 +3135,26 @@ class SysMLElementVisitor extends SysMLv2Visitor<void> {
 
     visitVerificationCaseUsage(ctx: any): void {
         const element = this.createElement('verification', ctx);
+        this.parentStack.push(element);
+        this.visitChildren(ctx);
+        this.parentStack.pop();
+    }
+
+    visitRequirementVerificationMember(ctx: any): void {
+        // Handle: verify requirementRef { ... }
+        const fullText = ctx.getText?.() || '';
+
+        const element = this.createElement('verify', ctx);
+
+        // Generate meaningful name for verify statements (getText() strips whitespace)
+        if (element.name === 'unnamed') {
+            // Pattern: verifyreferenceName{ or verifyreferenceName;
+            const match = fullText.match(/^verify([a-zA-Z_][a-zA-Z0-9_.]*)/i);
+            if (match) {
+                element.name = `verify: ${match[1]}`;
+            }
+        }
+
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();

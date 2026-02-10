@@ -357,6 +357,9 @@ export function activate(context: vscode.ExtensionContext) {
                 // Show ONLY the visualization panel, not the text document
                 VisualizationPanel.createOrShow(context.extensionUri, parser, combinedDocumentProxy, title);
 
+                // Update the Model Explorer with the combined document
+                await modelExplorerProvider.loadDocument(combinedDocumentProxy);
+
                 vscode.window.showInformationMessage(
                     `Visualizing ${fileNames.length} SysML files: ${fileNames.join(', ')}`
                 );
@@ -551,14 +554,38 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Try to parse any already-open SysML file.  When VS Code restores a
+    // session, activeTextEditor may still be undefined at the time activate()
+    // runs, and onDidChangeActiveTextEditor won't fire because there's no
+    // *change*.  We therefore retry with increasing delays.
+    function tryParseActiveEditor(): boolean {
+        const editor = vscode.window.activeTextEditor;
+        if (editor && editor.document.languageId === 'sysml') {
+            outputChannel.appendLine(`Parsing active SysML editor: ${editor.document.fileName}`);
+            vscode.commands.executeCommand('setContext', 'sysml.modelLoaded', true);
+            parseSysMLDocument(editor.document);
+            return true;
+        }
+        return false;
+    }
+
     const activeEditor = vscode.window.activeTextEditor;
     outputChannel.appendLine(`Active editor on activation: ${activeEditor ? activeEditor.document.fileName : 'none'}`);
     outputChannel.appendLine(`Language ID: ${activeEditor?.document.languageId ?? 'N/A'}`);
-    if (activeEditor && activeEditor.document.languageId === 'sysml') {
-        outputChannel.appendLine('Setting sysml.modelLoaded context to true (activation)');
-        vscode.commands.executeCommand('setContext', 'sysml.modelLoaded', true);
-        outputChannel.appendLine('Calling modelExplorerProvider.loadDocument (activation)');
-        parseSysMLDocument(activeEditor.document);
+    if (!tryParseActiveEditor()) {
+        // Editor not ready yet — retry a few times with increasing delays
+        const retryDelays = [100, 500, 1500];
+        let retryIndex = 0;
+        const retryTimer = globalThis.setInterval(() => {
+            if (tryParseActiveEditor() || retryIndex >= retryDelays.length) {
+                globalThis.clearInterval(retryTimer);
+                if (retryIndex >= retryDelays.length) {
+                    outputChannel.appendLine('No active SysML editor found after retries');
+                }
+                return;
+            }
+            retryIndex++;
+        }, retryDelays[Math.min(retryIndex, retryDelays.length - 1)]);
     }
 
     context.subscriptions.push(
@@ -572,13 +599,26 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     // Cancel active parse when a document is closed mid-flight
+    // Also clear Model Explorer if no SysML files remain open
     context.subscriptions.push(
         vscode.workspace.onDidCloseTextDocument(document => {
-            if (document.languageId === 'sysml' && activeParseCancel) {
-                outputChannel.appendLine(`onDidCloseTextDocument: cancelling parse for ${document.fileName.split('/').pop()}`);
-                activeParseCancel.cancel();
-                activeParseCancel.dispose();
-                activeParseCancel = undefined;
+            if (document.languageId === 'sysml') {
+                if (activeParseCancel) {
+                    outputChannel.appendLine(`onDidCloseTextDocument: cancelling parse for ${document.fileName.split('/').pop()}`);
+                    activeParseCancel.cancel();
+                    activeParseCancel.dispose();
+                    activeParseCancel = undefined;
+                }
+
+                // Check if any SysML files remain open
+                const remainingSysmlEditors = vscode.window.visibleTextEditors.filter(
+                    e => e.document.languageId === 'sysml' && !e.document.isClosed && e.document !== document
+                );
+                if (remainingSysmlEditors.length === 0) {
+                    outputChannel.appendLine('onDidCloseTextDocument: no SysML files open, clearing Model Explorer');
+                    vscode.commands.executeCommand('setContext', 'sysml.modelLoaded', false);
+                    modelExplorerProvider.clear();
+                }
             }
         })
     );

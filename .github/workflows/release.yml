@@ -45,6 +45,33 @@ jobs:
       - name: Verify VSIX version
         run: test -f "sysml-v2-support-${{ steps.version.outputs.version }}.vsix"
 
+      - name: Extract release notes from CHANGELOG.md
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Extract the section for this version from CHANGELOG.md
+          # Matches from "## [<version>]" up to the next "## [" heading or end of file
+          NOTES=$(awk -v ver="$VERSION" '
+            BEGIN { found=0 }
+            /^## \[/ {
+              if (found) exit
+              if (index($0, "## [" ver "]")) { found=1; next }
+            }
+            found { print }
+          ' CHANGELOG.md)
+
+          if [ -z "$NOTES" ]; then
+            echo "::warning::No changelog entry found for version $VERSION, using fallback"
+            NOTES="No changelog entry for this version."
+          fi
+
+          # Write multiline output using delimiter
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "$NOTES"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         env:
@@ -54,6 +81,10 @@ jobs:
           name: Release ${{ steps.version.outputs.version }}
           body: |
             ## SysML v2.0 Extension v${{ steps.version.outputs.version }}
+
+            ${{ steps.changelog.outputs.notes }}
+
+            ---
 
             ### Installation
             Download the `.vsix` file and install using:

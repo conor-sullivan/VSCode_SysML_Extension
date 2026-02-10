@@ -73,6 +73,12 @@ export class SemanticResolver {
         element: any,
         _uri: vscode.Uri
     ): Promise<EnrichedElement> {
+        // Debug: trace unnamed connections
+        if (element.name === 'unnamed' && element.type === 'connection') {
+            // eslint-disable-next-line no-console
+            console.log(`[resolver] Connection at line ${element.range?.start?.line} is unnamed in input`);
+        }
+
         const diagnostics: SemanticDiagnostic[] = [];
         let resolvedType: ResolvedType | null = null;
 
