@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0]
+
+### Added
+
+- Worker thread for ANTLR parsing — heavy lexer/parser/visitor work now runs off the extension host thread, eliminating ~4s UI freezes on large files
+- `parseAsync()` method on `SysMLParser` with automatic fallback to synchronous parsing if the worker is unavailable
+- 300ms debounce on document change events to avoid parse-per-keystroke
+
+### Fixed
+
+- Cytoscape SVG plugin registered twice — removed duplicate `cytoscape.use()` calls; UMD bundles already self-register on script load
+- Removed unsupported `<meta http-equiv>` cache tags from visualization webview HTML (stripped by VS Code sandbox)
+- Release workflow now installs Java and downloads the ANTLR jar so `vscode:prepublish` succeeds in CI
+
 ## [0.14.0]
 
 ### Added

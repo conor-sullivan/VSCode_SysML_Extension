@@ -14,8 +14,8 @@ Use this template when preparing a new release.
 ## Creating the Release
 
 ```bash
-git tag v0.14.0
-git push origin v0.14.0
+git tag v0.15.0
+git push origin v0.15.0
 ```
 
 The [release workflow](../workflows/release.yml) will automatically:
