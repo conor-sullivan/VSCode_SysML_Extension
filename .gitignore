@@ -60,3 +60,13 @@ Thumbs.db
 sysml.library/
 
 docs
+
+# Grammar generation
+.grammar-cache/
+tools/*.jar
+__pycache__/
+
+# Test output
+test-output/
+
+samples/temp

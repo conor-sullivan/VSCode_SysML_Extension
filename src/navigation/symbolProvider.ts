@@ -2,13 +2,22 @@ import * as vscode from 'vscode';
 import { SysMLParser } from '../parser/sysmlParser';
 
 export class SysMLDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
-     
+
     constructor(private _parser: SysMLParser) {}
 
     async provideDocumentSymbols(
         document: vscode.TextDocument,
         token: vscode.CancellationToken
     ): Promise<vscode.SymbolInformation[] | vscode.DocumentSymbol[]> {
+        if (token.isCancellationRequested) {
+            return [];
+        }
+
+        // Wait for any centralized parse to finish so we don't trigger a
+        // duplicate heavy ANTLR parse that would block the UI before the
+        // progress notification is visible.
+        await this._parser.waitForParse();
+
         if (token.isCancellationRequested) {
             return [];
         }

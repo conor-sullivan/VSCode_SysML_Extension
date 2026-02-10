@@ -47,7 +47,7 @@ package CameraTestBDD {
 
     port def DataPort {
         attribute bandwidthMbps : Real;
-        flow property payload : String direction inout;
+        inout attribute payload : String;
     }
 
     port def OpticalPort {

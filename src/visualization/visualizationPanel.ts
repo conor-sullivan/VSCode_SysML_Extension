@@ -146,7 +146,13 @@ export class VisualizationPanel {
         }
         this._lastContentHash = contentHash;
 
-        // Execute immediately - no debounce needed since content hash prevents redundant work
+        // Tell the webview to show loading indicator immediately
+        this._panel.webview.postMessage({ command: 'showLoading', message: 'Parsing SysML model...' });
+
+        // Yield to the event loop so the webview can render the loading state
+        // before the synchronous ANTLR parse blocks the extension host
+        await new Promise(resolve => setTimeout(resolve, 0));
+
         await this._doUpdateVisualization();
     }
 
@@ -2892,6 +2898,12 @@ export class VisualizationPanel {
         window.addEventListener('message', event => {
             const message = event.data;
             switch (message.command) {
+                case 'showLoading':
+                    showLoading(message.message || 'Parsing SysML model...');
+                    break;
+                case 'hideLoading':
+                    hideLoading();
+                    break;
                 case 'update':
                     // Quick hash check - skip render if data unchanged
                     const newHash = quickHash({
@@ -5301,37 +5313,55 @@ export class VisualizationPanel {
             // Determine if horizontal or vertical layout
             const isHorizontal = layoutDirection === 'horizontal' || layoutDirection === 'auto';
 
-            // Dynamic spacing based on tree complexity and children count
-            const treeLayout = d3.tree()
-                .size(isHorizontal ? [height * 2.5 - 100, width - 200] : [width - 200, height * 2.5 - 100])
-                .separation((a, b) => {
-                    // Calculate separation based on number of children in parent nodes
-                    if (a.parent === b.parent) {
-                        // Sibling separation - increase based on parent's child count
-                        const parentChildCount = a.parent ? (a.parent.children || []).length : 1;
-                        const baseSeparation = Math.max(8, Math.min(20, parentChildCount * 1.5));
+            // Count total nodes for dynamic sizing
+            const hierarchyData = convertToHierarchy(data.elements);
+            const root = d3.hierarchy(hierarchyData);
+            const totalNodes = root.descendants().length;
+            const maxDepth = root.height;
 
-                        // Additional spacing if either sibling has many children
+            // Calculate nodes per level to determine required spacing
+            const nodesPerLevel = new Array(maxDepth + 1).fill(0);
+            root.each(d => { nodesPerLevel[d.depth]++; });
+            const maxNodesAtAnyLevel = Math.max(...nodesPerLevel);
+
+            // Use nodeSize for guaranteed minimum spacing between nodes
+            // This ensures nodes don't overlap regardless of tree complexity
+            const nodeHeight = 70;  // Vertical space per node (for horizontal layout)
+            const nodeWidth = 280;  // Horizontal space between levels (for horizontal layout)
+
+            // Dynamic spacing based on tree complexity
+            const treeLayout = d3.tree()
+                .nodeSize(isHorizontal ? [nodeHeight, nodeWidth] : [nodeWidth, nodeHeight])
+                .separation((a, b) => {
+                    // Separation multiplier - higher values = more space between siblings
+                    if (a.parent === b.parent) {
+                        // Same parent: base separation with bonus for nodes with children
                         const aChildCount = (a.children || []).length;
                         const bChildCount = (b.children || []).length;
                         const maxChildCount = Math.max(aChildCount, bChildCount);
-                        const childBonus = Math.max(0, maxChildCount * 2);
 
-                        return baseSeparation + childBonus;
+                        // Base separation of 1.5 + bonus for complex subtrees
+                        return 1.5 + (maxChildCount > 0 ? Math.min(maxChildCount * 0.3, 2) : 0);
                     } else {
-                        // Different parent separation - much larger
-                        const aParentChildCount = a.parent ? (a.parent.children || []).length : 1;
-                        const bParentChildCount = b.parent ? (b.parent.children || []).length : 1;
-                        const avgChildCount = (aParentChildCount + bParentChildCount) / 2;
-
-                        return Math.max(15, Math.min(30, avgChildCount * 2));
+                        // Different parents: larger separation
+                        return 2.5;
                     }
                 });
 
-            const hierarchyData = convertToHierarchy(data.elements);
-
-            const root = d3.hierarchy(hierarchyData);
             treeLayout(root);
+
+            // Calculate bounding box since nodeSize can produce negative coordinates
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            root.each(d => {
+                if (d.x < minX) minX = d.x;
+                if (d.x > maxX) maxX = d.x;
+                if (d.y < minY) minY = d.y;
+                if (d.y > maxY) maxY = d.y;
+            });
+
+            // Offset to ensure all nodes are in positive space with margin
+            const offsetX = isHorizontal ? 150 : -minX + 150;
+            const offsetY = isHorizontal ? -minX + 50 : 150;
 
             const links = g.selectAll('.link')
                 .data(root.links())
@@ -5339,8 +5369,8 @@ export class VisualizationPanel {
                 .append('path')
                 .attr('class', 'link')
                 .attr('d', isHorizontal
-                    ? d3.linkHorizontal().x(d => d.y + 150).y(d => d.x + 50)
-                    : d3.linkVertical().x(d => d.x + 150).y(d => d.y + 50));
+                    ? d3.linkHorizontal().x(d => d.y + offsetX).y(d => d.x + offsetY)
+                    : d3.linkVertical().x(d => d.x + offsetX).y(d => d.y + offsetY));
 
             const nodes = g.selectAll('.node')
                 .data(root.descendants())
@@ -5348,23 +5378,45 @@ export class VisualizationPanel {
                 .append('g')
                 .attr('class', 'node-group')
                 .attr('transform', d => isHorizontal
-                    ? 'translate(' + (d.y + 150) + ',' + (d.x + 50) + ')'
-                    : 'translate(' + (d.x + 150) + ',' + (d.y + 50) + ')');
+                    ? 'translate(' + (d.y + offsetX) + ',' + (d.x + offsetY) + ')'
+                    : 'translate(' + (d.x + offsetX) + ',' + (d.y + offsetY) + ')');
 
             // Create background rectangles for better text readability
             nodes.each(function(d) {
                 const node = d3.select(this);
-                const nameLength = d.data.name.length;
-                const typeLength = d.data.type.length;
-                const maxLength = Math.max(nameLength, typeLength);
+
+                // Node width limits
+                const MIN_NODE_WIDTH = 100;
+                const MAX_NODE_WIDTH = 220;
+                const CHAR_WIDTH = 7.5;  // Average character width in pixels for the font
+                const PADDING = 28;       // Padding: 10 (dx offset) + 8 (left margin) + 10 (right margin)
+
+                // Calculate required width based on actual text content
+                const nameWidth = d.data.name.length * CHAR_WIDTH + PADDING;
+                const typeWidth = (d.data.type.length + 2) * CHAR_WIDTH + PADDING;  // +2 for brackets
+                const childCountWidth = (d.children || d._children)
+                    ? ((d.children || d._children).length.toString().length + 12) * CHAR_WIDTH + PADDING  // "(X children)"
+                    : 0;
+
+                // Use the widest content, clamped to min/max limits
+                const requiredWidth = Math.max(nameWidth, typeWidth, childCountWidth);
+                const nodeWidth = Math.min(MAX_NODE_WIDTH, Math.max(MIN_NODE_WIDTH, requiredWidth));
+
+                // Calculate truncation based on available width
+                const availableChars = Math.floor((nodeWidth - PADDING) / CHAR_WIDTH);
+                const truncatedName = d.data.name.length > availableChars
+                    ? d.data.name.substring(0, availableChars - 3) + '...'
+                    : d.data.name;
+                const maxTypeChars = availableChars - 2;  // Account for brackets
+                const truncatedType = d.data.type.length > maxTypeChars
+                    ? d.data.type.substring(0, maxTypeChars - 3) + '...'
+                    : d.data.type;
+                const displayType = '[' + truncatedType + ']';
 
                 // Check library validation status
                 const isLibValidated = isLibraryValidated(d.data);
                 const borderColor = isLibValidated ? 'var(--vscode-charts-green)' : 'var(--vscode-panel-border)';
                 const borderWidth = isLibValidated ? '2px' : '1px';
-
-                // Calculate node dimensions for inline edit
-                const nodeWidth = Math.max(85, maxLength * 6.5);
 
                 // Click handler function - reused for node group and background
                 const handleNodeClick = function(event) {
@@ -5419,11 +5471,7 @@ export class VisualizationPanel {
                     .attr('r', 6)
                     .style('fill', nodeColor);
 
-                // Element name (truncate if too long)
-                const truncatedName = d.data.name.length > 15
-                    ? d.data.name.substring(0, 15) + '...'
-                    : d.data.name;
-
+                // Element name (already truncated above)
                 node.append('text')
                     .attr('class', 'node-label node-name-text')
                     .attr('data-element-name', d.data.name)
@@ -5432,12 +5480,12 @@ export class VisualizationPanel {
                     .text(truncatedName)
                     .style('font-weight', 'bold');
 
-                // Element type (smaller and below name)
+                // Element type (already truncated above)
                 node.append('text')
                     .attr('class', 'node-type')
                     .attr('dx', 10)
                     .attr('dy', 12)
-                    .text('[' + d.data.type + ']');
+                    .text(displayType);
 
                 // Add child count indicator if has children
                 if (d.children || d._children) {

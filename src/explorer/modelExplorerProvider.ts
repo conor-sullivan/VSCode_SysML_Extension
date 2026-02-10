@@ -6,8 +6,8 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<vscode.Tre
     readonly onDidChangeTreeData: vscode.Event<vscode.TreeItem | undefined | null | void> = this._onDidChangeTreeData.event;
 
     private currentDocument: vscode.TextDocument | undefined;
+    private pendingDocument: vscode.TextDocument | undefined;
     private rootElements: SysMLElement[] = [];
-    private debounceTimer: ReturnType<typeof setTimeout> | undefined;
     private isLoading: boolean = false;
 
 
@@ -20,27 +20,81 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<vscode.Tre
         this._onDidChangeTreeData.fire();
     }
 
-    async loadDocument(document: vscode.TextDocument): Promise<void> {
+    /**
+     * Clear the model explorer when no SysML files are open
+     */
+    clear(): void {
+        this.currentDocument = undefined;
+        this.pendingDocument = undefined;
+        this.rootElements = [];
+        this._onDidChangeTreeData.fire();
+    }
+
+    async loadDocument(document: vscode.TextDocument, cancellationToken?: vscode.CancellationToken): Promise<void> {
         this.currentDocument = document;
 
-        // Debounce rapid calls (e.g., during typing)
-        if (this.debounceTimer) {
-            globalThis.clearTimeout(this.debounceTimer);
+        // If we're already loading, queue the new document so it isn't silently dropped
+        if (this.isLoading) {
+            this.pendingDocument = document;
+            try {
+                const { getOutputChannel } = require('../extension');
+                getOutputChannel()?.appendLine('ModelExplorer: loadDocument queued (already loading)');
+            } catch { /* ignore */ }
+            return;
         }
 
-        this.debounceTimer = setTimeout(async () => {
-            if (this.isLoading) return;
-            this.isLoading = true;
+        // Check cancellation / closed before doing expensive work
+        if (cancellationToken?.isCancellationRequested || document.isClosed) {
+            try {
+                const { getOutputChannel } = require('../extension');
+                getOutputChannel()?.appendLine(`ModelExplorer: cancelled/closed before parse for ${document.fileName}`);
+            } catch { /* ignore */ }
+            return;
+        }
+
+        this.isLoading = true;
+
+        try {
+            const { getOutputChannel } = require('../extension');
+            getOutputChannel()?.appendLine(`ModelExplorer: Starting parseWithSemanticResolution for ${document.fileName}`);
+        } catch { /* ignore */ }
+
+        try {
+            // Phase 3: Use semantic resolution for enhanced element data
+            const resolutionResult = await this._parser.parseWithSemanticResolution(document);
+
+            // Check cancellation after parse (file may have been closed during parse)
+            if (cancellationToken?.isCancellationRequested || document.isClosed) {
+                try {
+                    const { getOutputChannel } = require('../extension');
+                    getOutputChannel()?.appendLine(`ModelExplorer: cancelled/closed after parse for ${document.fileName}, discarding result`);
+                } catch { /* ignore */ }
+                return;
+            }
 
             try {
-                // Phase 3: Use semantic resolution for enhanced element data
-                const resolutionResult = await this._parser.parseWithSemanticResolution(document);
-                this.rootElements = this._parser.convertEnrichedToSysMLElements(resolutionResult.elements);
-                this._onDidChangeTreeData.fire();
-            } finally {
-                this.isLoading = false;
+                const { getOutputChannel } = require('../extension');
+                getOutputChannel()?.appendLine(`ModelExplorer: Resolution returned ${resolutionResult.elements.length} enriched elements`);
+            } catch { /* ignore */ }
+
+            this.rootElements = this._parser.convertEnrichedToSysMLElements(resolutionResult.elements);
+
+            try {
+                const { getOutputChannel } = require('../extension');
+                getOutputChannel()?.appendLine(`ModelExplorer: Converted to ${this.rootElements.length} tree root elements, firing change event`);
+            } catch { /* ignore */ }
+
+            this._onDidChangeTreeData.fire();
+        } finally {
+            this.isLoading = false;
+
+            // If a new document was queued while we were loading, process it now
+            if (this.pendingDocument) {
+                const pending = this.pendingDocument;
+                this.pendingDocument = undefined;
+                this.loadDocument(pending);
             }
-        }, 32); // 32ms debounce - minimal delay for responsive tree updates
+        }
     }
 
     getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
@@ -159,6 +213,12 @@ export class ModelTreeItem extends vscode.TreeItem {
                 : vscode.TreeItemCollapsibleState.None
         );
 
+        // Debug: trace unnamed elements
+        if (element.name === 'unnamed' && element.type === 'connection') {
+            // eslint-disable-next-line no-console
+            console.log(`[TreeView] Connection at line ${element.range?.start?.line} showing as unnamed`);
+        }
+
         // Enhanced tooltip with more information
         const partType = element.attributes.get('partType') as string;
         const tooltipSuffix = partType ? ` : ${partType}` : (element.children.length > 0 ? ` (${element.children.length} children)` : '');
@@ -195,6 +255,8 @@ export class ModelTreeItem extends vscode.TreeItem {
             'reference': '🔗 ',
             'connection': '🔀 ',
             'interface': '🔌 ',
+            'flow def': '🔀 ',
+            'flowProperty': '🔀 ',
             'item': '📋 ',
             'enum': '📚 ',
             'datatype': '🔢 ',
@@ -219,6 +281,8 @@ export class ModelTreeItem extends vscode.TreeItem {
             'reference': 'references',
             'connection': 'link',
             'interface': 'symbol-interface',
+            'flow def': 'link',
+            'flowProperty': 'arrow-both',
             'item': 'symbol-struct',
             'enum': 'symbol-enum',
             'datatype': 'symbol-field',

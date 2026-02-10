@@ -321,6 +321,48 @@ export class SysMLParser {
     private resolutionCache: Map<string, { hash: number; result: ResolutionResult }> = new Map();
 
     /**
+     * Gate that language providers can await so they don't trigger their own
+     * heavy parse while a centralized parse is already in progress.
+     * Resolves once the current centralized parse completes.
+     */
+    private _parseGate: Promise<void> = Promise.resolve();
+    private _resolveParseGate: (() => void) | null = null;
+
+    /** Signal that a centralized parse is about to begin. */
+    public beginParseGate(): void {
+        if (!this._resolveParseGate) {
+            this._parseGate = new Promise<void>(resolve => {
+                this._resolveParseGate = resolve;
+            });
+        }
+    }
+
+    /** Signal that the centralized parse has finished. */
+    public endParseGate(): void {
+        if (this._resolveParseGate) {
+            this._resolveParseGate();
+            this._resolveParseGate = null;
+        }
+    }
+
+    /** Wait for any in-progress centralized parse to finish. Resolves immediately if idle. */
+    public waitForParse(): Promise<void> {
+        return this._parseGate;
+    }
+
+    /**
+     * Clear all parse and resolution caches.
+     * Returns the number of entries that were cleared.
+     */
+    public clearCache(): { parseEntries: number; resolutionEntries: number } {
+        const parseEntries = this.parseCache.size;
+        const resolutionEntries = this.resolutionCache.size;
+        this.parseCache.clear();
+        this.resolutionCache.clear();
+        return { parseEntries, resolutionEntries };
+    }
+
+    /**
      * Simple string hash function for content comparison
      */
     private hashContent(content: string): number {
@@ -404,6 +446,20 @@ export class SysMLParser {
 
             // Parse with ANTLR - include errors for diagnostics
             const elements = antlr.parseDocument(document, false); // Exclude error elements for cleaner output
+
+            // Debug: trace unnamed connections after ANTLR parse
+            const findUnnamedConnections = (els: SysMLElement[], depth = 0): void => {
+                for (const el of els) {
+                    if (el.name === 'unnamed' && el.type === 'connection') {
+                        // eslint-disable-next-line no-console
+                        console.log(`[parse] Connection at line ${el.range?.start?.line} is unnamed after ANTLR parse`);
+                    }
+                    if (el.children) {
+                        findUnnamedConnections(el.children, depth + 1);
+                    }
+                }
+            };
+            findUnnamedConnections(elements);
 
             // Update internal state
             this.updateElementCache(elements);
@@ -595,6 +651,12 @@ export class SysMLParser {
      */
     convertEnrichedToSysMLElements(enriched: EnrichedElement[]): SysMLElement[] {
         return enriched.map(element => {
+            // Debug: trace unnamed connections
+            if (element.name === 'unnamed' && element.type === 'connection') {
+                // eslint-disable-next-line no-console
+                console.log(`[convert] Connection at line ${element.range?.start?.line} is unnamed in enriched`);
+            }
+
             // Debug: Check if enriched element has doc
             if (element.attributes && element.attributes.has('doc')) {
                 // console.log(`[CONVERT] ${element.name} (${element.type}) has doc in enriched: ${element.attributes.get('doc')?.toString().substring(0, 50)}...`);

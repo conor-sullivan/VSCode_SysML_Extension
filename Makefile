@@ -6,8 +6,10 @@ OUT_DIR = out
 SRC_DIR = src
 DIST_DIR = dist
 LIBRARY_DIR = sysml.library
-LIBRARY_VERSION = 2025-10
-LIBRARY_URL = https://github.com/Systems-Modeling/SysML-v2-Release/archive/refs/tags/$(LIBRARY_VERSION).tar.gz
+GRAMMAR_CONFIG = scripts/grammar/config.json
+LIBRARY_VERSION = $(shell node -p "require('./$(GRAMMAR_CONFIG)').release_tag")
+LIBRARY_REPO = $(shell node -p "require('./$(GRAMMAR_CONFIG)').release_repo")
+LIBRARY_URL = https://github.com/$(LIBRARY_REPO)/archive/refs/tags/$(LIBRARY_VERSION).tar.gz
 PACKAGE_NAME = $(shell node -p "require('./package.json').name")
 VERSION = $(shell node -p "require('./package.json').version")
 
@@ -46,6 +48,8 @@ help:
 	@echo "  $(GREEN)debug$(NC)          - Prepare for debugging (then press F5 in VS Code)"
 	@echo "  $(GREEN)debug-watch$(NC)    - Launch watch mode for debugging with auto-recompile"
 	@echo "  $(GREEN)debug-elk$(NC)      - Automated ELK rendering debugger with diagnostics"
+	@echo "  $(GREEN)grammar$(NC)        - Generate ANTLR4 grammar from SysML v2 spec BNF"
+	@echo "  $(GREEN)grammar-clean$(NC)  - Remove generated grammar files"
 	@echo "  $(GREEN)prepublish$(NC)     - Prepare for publishing"
 	@echo "  $(GREEN)info$(NC)           - Show project information"
 	@echo "  $(GREEN)help$(NC)           - Show this help message"
@@ -268,6 +272,32 @@ info:
 	@echo "  Node modules: $(shell [ -d $(NODE_MODULES) ] && echo '✓ Installed' || echo '✗ Not installed')"
 	@echo "  Compiled: $(shell [ -d $(OUT_DIR) ] && echo '✓ Yes' || echo '✗ No')"
 	@echo "  Package exists: $(shell [ -f "$(PACKAGE_NAME)-$(VERSION).vsix" ] && echo '✓ Yes' || echo '✗ No')"
+
+# Generate ANTLR4 grammar from official SysML v2 spec BNF
+.PHONY: grammar
+grammar:
+	@echo "$(YELLOW)Generating ANTLR4 grammar from SysML v2 spec BNF...$(NC)"
+	@if ! command -v python3 >/dev/null 2>&1; then \
+		echo "$(RED)Python 3 is required but not installed.$(NC)"; exit 1; fi
+	@pip3 install -q -r scripts/grammar/requirements.txt 2>/dev/null || \
+		pip install -q -r scripts/grammar/requirements.txt
+	python3 scripts/grammar/generate_grammar.py --cache
+	@echo "$(GREEN)Grammar generated successfully!$(NC)"
+	@echo "$(YELLOW)Run 'npm run antlr:generate' to compile TypeScript sources.$(NC)"
+
+# Generate grammar and compile ANTLR4 to TypeScript in one step
+.PHONY: grammar-full
+grammar-full: grammar
+	@echo "$(YELLOW)Compiling ANTLR4 grammar to TypeScript...$(NC)"
+	npm run antlr:generate
+	@echo "$(GREEN)ANTLR4 TypeScript sources generated!$(NC)"
+
+# Clean generated grammar files
+.PHONY: grammar-clean
+grammar-clean:
+	@echo "$(YELLOW)Cleaning generated grammar cache...$(NC)"
+	rm -rf .grammar-cache
+	@echo "$(GREEN)Grammar cache cleaned.$(NC)"
 
 # Verify all is working
 .PHONY: verify

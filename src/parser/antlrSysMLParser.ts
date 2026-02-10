@@ -1,8 +1,6 @@
-import { ANTLRInputStream, CommonTokenStream } from 'antlr4ts';
-import { ANTLRErrorListener } from 'antlr4ts/ANTLRErrorListener';
-import { AbstractParseTreeVisitor } from 'antlr4ts/tree/AbstractParseTreeVisitor';
+import { CharStream, CommonTokenStream, ErrorListener, PredictionMode } from 'antlr4';
 import * as vscode from 'vscode';
-import { IdentifierContext, SpecializationContext, SysMLv2 } from './generated/grammar/SysMLv2';
+import { SysMLv2 } from './generated/grammar/SysMLv2';
 import { SysMLv2Lexer } from './generated/grammar/SysMLv2Lexer';
 import { SysMLv2Visitor } from './generated/grammar/SysMLv2Visitor';
 import { LibraryIndexer } from './libraryIndexer';
@@ -16,9 +14,17 @@ export class ANTLRSysMLParser {
     private elements: Map<string, SysMLElement> = new Map();
     private relationships: Relationship[] = [];
     private libraryIndexer: LibraryIndexer;
+    // Reuse lexer/parser instances to preserve the DFA prediction cache across parses
+    private cachedLexer: SysMLv2Lexer;
+    private cachedParser: SysMLv2;
 
     constructor() {
         this.libraryIndexer = LibraryIndexer.getInstance();
+        // Pre-construct lexer/parser so the ATN is deserialized once and the DFA cache persists
+        this.cachedLexer = new SysMLv2Lexer(new CharStream(''));
+        const tokenStream = new CommonTokenStream(this.cachedLexer);
+        this.cachedParser = new SysMLv2(tokenStream);
+        (this.cachedParser as any)._interp.predictionMode = PredictionMode.SLL;
     }
 
     /**
@@ -63,10 +69,16 @@ export class ANTLRSysMLParser {
             this.relationships = [];
 
             const content = document.getText();
-            const inputStream = new ANTLRInputStream(content);
+            const inputStream = new CharStream(content);
+
+            // Reuse cached lexer/parser to preserve DFA prediction cache
             const lexer = new SysMLv2Lexer(inputStream);
             const tokenStream = new CommonTokenStream(lexer);
-            const parser = new SysMLv2(tokenStream);
+            const parser = this.cachedParser;
+            (parser as any).setTokenStream(tokenStream);
+            parser.reset();
+
+            // SLL prediction mode is set once in constructor
 
             // Add custom error handling
             const errorListener = new SysMLErrorListener(document, this.elements);
@@ -76,7 +88,7 @@ export class ANTLRSysMLParser {
             parser.addErrorListener(errorListener);
 
             // Parse the entire document starting from the model rule
-            const modelContext = parser.model();
+            const modelContext = parser.rootNamespace();
 
             // Use visitor pattern to extract elements
             const visitor = new SysMLElementVisitor(document, this.elements, this.relationships);
@@ -136,13 +148,8 @@ export class ANTLRSysMLParser {
             return filteredElements;
 
         } catch (error) {
-            // Log error internally for debugging with stack trace
+            // eslint-disable-next-line no-console
             console.error('[ANTLR Parser] Fatal error during parsing:', error);
-            if (error instanceof Error) {
-                console.error('[ANTLR Parser] Stack trace:', error.stack);
-                console.error('[ANTLR Parser] Error message:', error.message);
-                console.error('[ANTLR Parser] Error name:', error.name);
-            }
             return [{
                 type: 'error',
                 name: 'Parse Error',
@@ -681,7 +688,7 @@ export class ANTLRSysMLParser {
 /**
  * ANTLR visitor implementation for extracting SysML elements.
  */
-class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysMLv2Visitor<void> {
+class SysMLElementVisitor extends SysMLv2Visitor<void> {
     private currentNamespace: string[] = [];
     private parentStack: SysMLElement[] = [];
     private currentElement: SysMLElement | null = null;
@@ -700,39 +707,25 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         super.visit(tree);
     }
 
-    // visitElement to properly dispatch to specific element handlers
-    visitElement(ctx: any): void {
-        // Check which specific element type is present and dispatch manually
-        // This is needed because keywords like 'package' can be valid identifiers
-        // and the grammar may not always dispatch correctly to sub-rules
-        try {
-            if (ctx.packageElement && typeof ctx.packageElement === 'function') {
-                const pkgCtx = ctx.packageElement();
-                if (pkgCtx) {
-                    this.visitPackageElement(pkgCtx);
-                    return;
-                }
-            }
-        } catch {
-            // Fall through to visitChildren
-        }
-
-        // For other elements, use default behavior
-        this.visitChildren(ctx);
-    }
+    // Note: visitElement removed - the new grammar dispatches directly to specific rules
+    // (e.g., visitPackage, visitPartDefinition, etc.) without a generic 'element' intermediary.
 
     /**
      * Converts ANTLR position to VS Code Range.
+     * Note: antlr4 v4.13.2 uses `column` instead of `charPositionInLine`.
      */
     private getRange(ctx: any): vscode.Range {
         if (ctx.start && ctx.stop) {
+            const startCol = ctx.start.column ?? ctx.start.charPositionInLine ?? 0;
+            const stopCol = ctx.stop.column ?? ctx.stop.charPositionInLine ?? 0;
+            const stopTextLen = (ctx.stop.text?.length) || 1;
             const startPos = new vscode.Position(
                 ctx.start.line - 1,
-                ctx.start.charPositionInLine
+                startCol
             );
             const endPos = new vscode.Position(
                 ctx.stop.line - 1,
-                ctx.stop.charPositionInLine + ctx.stop.text.length
+                stopCol + stopTextLen
             );
             return new vscode.Range(startPos, endPos);
         }
@@ -741,6 +734,9 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
 
     /**
      * Extracts element name from context.
+     * The new auto-generated grammar uses `identification` (a parser rule) nested
+     * inside declaration sub-rules (e.g., packageDeclaration, definitionDeclaration,
+     * usageDeclaration). This method searches for the IdentificationContext recursively.
      */
     private getElementName(ctx: any): string {
         // SysML keywords that should NOT be used as element names
@@ -756,7 +752,8 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         ]);
 
         // Helper to strip quotes from quoted strings
-        const stripQuotes = (text: string): string => {
+        const stripQuotes = (text: string | undefined | null): string => {
+            if (!text) return '';
             if ((text.startsWith("'") && text.endsWith("'")) ||
                 (text.startsWith('"') && text.endsWith('"'))) {
                 return text.slice(1, -1);
@@ -764,104 +761,315 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
             return text;
         };
 
-        // Try to find identifier in various ways
-        // Note: ctx.identifier() can throw if the node doesn't exist due to parse errors
+        // Helper: recursively search for IdentificationContext in parse subtree
+        const findIdentification = (node: any, depth: number): any => {
+            if (depth > 6) return null;
+            if (node?.constructor?.name === 'IdentificationContext') return node;
+            if (node?.children) {
+                for (const child of node.children) {
+                    if (child?.constructor) {
+                        const result = findIdentification(child, depth + 1);
+                        if (result) return result;
+                    }
+                }
+            }
+            return null;
+        };
+
+        // Helper: extract name text from an IdentificationContext
+        // The identification rule is: ( LT name GT )? ( name )?
+        // The name rule is: IDENTIFIER | STRING
+        const extractFromIdentification = (idCtx: any): string | null => {
+            if (!idCtx?.children) return null;
+            for (const child of idCtx.children) {
+                // Check for NameContext (new grammar: identification → name)
+                if (child?.constructor?.name === 'NameContext') {
+                    if (child.children) {
+                        for (const nameChild of child.children) {
+                            if (nameChild?.symbol?.type === SysMLv2Lexer.STRING) {
+                                const stripped = stripQuotes(nameChild.text);
+                                if (stripped) return stripped;
+                            }
+                            if (nameChild?.symbol?.type === SysMLv2Lexer.IDENTIFIER) {
+                                const text = nameChild.text;
+                                if (text && !KEYWORDS.has(text.toLowerCase())) {
+                                    return text;
+                                }
+                            }
+                        }
+                    }
+                    // Fallback: try NameContext.getText() directly
+                    const nameText = child.getText?.();
+                    if (nameText) {
+                        const stripped = stripQuotes(nameText);
+                        if (stripped && !KEYWORDS.has(stripped.toLowerCase())) {
+                            return stripped;
+                        }
+                    }
+                }
+                // Check for direct STRING token (backward compat)
+                if (child?.symbol?.type === SysMLv2Lexer.STRING) {
+                    const stripped = stripQuotes(child.text);
+                    if (stripped) return stripped;
+                }
+                // Check for direct IDENTIFIER token (backward compat)
+                if (child?.symbol?.type === SysMLv2Lexer.IDENTIFIER) {
+                    const text = child.text;
+                    if (text && !KEYWORDS.has(text.toLowerCase())) {
+                        return text;
+                    }
+                }
+            }
+            // Fallback: get text and check if it's a valid name
+            const text = idCtx.getText?.() || '';
+            if (text) {
+                const stripped = stripQuotes(text);
+                // Quoted names (e.g., 'first') are always valid even if they match keywords
+                const isQuoted = text.startsWith("'") || text.startsWith('"');
+                if (stripped && (isQuoted || (!KEYWORDS.has(stripped.toLowerCase()) && /^[a-zA-Z_]/.test(stripped)))) {
+                    return stripped;
+                }
+            }
+            return null;
+        };
+
+        // Strategy 1: Search for IdentificationContext in the subtree (handles new grammar)
+        const idCtx = findIdentification(ctx, 0);
+        if (idCtx) {
+            const name = extractFromIdentification(idCtx);
+            if (name) return name;
+        }
+
+        // Strategy 2: Try old grammar accessors (ctx.identifier) for backward compatibility
         if (ctx.identifier && typeof ctx.identifier === 'function') {
             try {
                 const identifierCtx = ctx.identifier();
                 if (identifierCtx) {
-                    // Check for STRING token (quoted identifier) first
                     if (identifierCtx.STRING && typeof identifierCtx.STRING === 'function') {
                         const stringNode = identifierCtx.STRING();
-                        if (stringNode && stringNode.text) {
+                        if (stringNode?.text) {
                             return stripQuotes(stringNode.text);
                         }
                     }
-                    // IdentifierContext has an IDENTIFIER() method that returns TerminalNode
                     if (identifierCtx.IDENTIFIER && typeof identifierCtx.IDENTIFIER === 'function') {
                         const identifierNode = identifierCtx.IDENTIFIER();
-                        if (identifierNode && identifierNode.text && !KEYWORDS.has(identifierNode.text.toLowerCase())) {
+                        if (identifierNode?.text && !KEYWORDS.has(identifierNode.text.toLowerCase())) {
                             return identifierNode.text;
                         }
                     }
                 }
             } catch {
-                // identifier() can throw if node doesn't exist - continue to fallbacks
+                // identifier() can throw if node doesn't exist
             }
         }
-        if (ctx.IDENTIFIER && typeof ctx.IDENTIFIER === 'function') {
-            try {
-                const identifierNode = ctx.IDENTIFIER();
-                if (identifierNode && identifierNode.text && !KEYWORDS.has(identifierNode.text.toLowerCase())) {
-                    return identifierNode.text;
-                }
-            } catch {
-                // IDENTIFIER() can throw if node doesn't exist
-            }
-        }
-        // Check for STRING token (quoted identifier) directly on context
-        if (ctx.STRING && typeof ctx.STRING === 'function') {
-            try {
-                const stringNode = ctx.STRING();
-                if (stringNode && stringNode.text) {
-                    return stripQuotes(stringNode.text);
-                }
-            } catch {
-                // STRING() can throw if node doesn't exist
-            }
-        }
+
+        // Strategy 3: Scan direct children for IDENTIFIER/STRING tokens
         if (ctx.children && ctx.children.length > 0) {
-            // Look for STRING tokens (quoted identifiers) in children first
             for (const child of ctx.children) {
-                if (child.symbol && child.symbol.type === SysMLv2Lexer.STRING) {
-                    const text = child.text;
-                    if (text) {
-                        return stripQuotes(text);
-                    }
-                }
-            }
-            // Look for identifier in children - skip keywords
-            for (const child of ctx.children) {
-                if (child.symbol && child.symbol.type === SysMLv2Lexer.IDENTIFIER) {
-                    const text = child.text;
-                    if (text && !KEYWORDS.has(text.toLowerCase()) && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(text)) {
-                        return text;
-                    }
-                }
-            }
-            // Enhanced fallback: look for quoted strings
-            for (const child of ctx.children) {
-                if (child.text && (child.text.startsWith("'") || child.text.startsWith('"'))) {
+                if (child?.symbol?.type === SysMLv2Lexer.STRING) {
                     return stripQuotes(child.text);
                 }
             }
-            // Enhanced fallback: look for text that looks like identifiers (but not keywords)
             for (const child of ctx.children) {
-                if (child.text && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(child.text)) {
+                if (child?.symbol?.type === SysMLv2Lexer.IDENTIFIER) {
                     const text = child.text;
-                    if (!KEYWORDS.has(text.toLowerCase())) {
+                    if (text && !KEYWORDS.has(text.toLowerCase())) {
                         return text;
                     }
                 }
             }
-            // Check grandchildren
+            // Check children text for identifier-like strings
             for (const child of ctx.children) {
-                if (child.children && child.children.length > 0) {
-                    for (const grandchild of child.children) {
-                        // Check for quoted strings in grandchildren
-                        if (grandchild.text && (grandchild.text.startsWith("'") || grandchild.text.startsWith('"'))) {
-                            return stripQuotes(grandchild.text);
+                if (child?.text && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(child.text)) {
+                    if (!KEYWORDS.has(child.text.toLowerCase())) {
+                        return child.text;
+                    }
+                }
+            }
+        }
+
+        // Strategy 4: For elements with redefines/subsets but no name, generate synthetic name
+        // This handles: "part redefines engine" → "redefines engine"
+        // "attribute :>> fuelMass" → "redefines fuelMass"
+        const findContext = (node: any, targetName: string, depth: number): any => {
+            if (depth > 8 || !node) return null;
+            if (node?.constructor?.name === targetName) return node;
+            if (node?.children) {
+                for (const child of node.children) {
+                    const result = findContext(child, targetName, depth + 1);
+                    if (result) return result;
+                }
+            }
+            return null;
+        };
+
+        // Check for ownedRedefinition (handles :>> shorthand and explicit redefines)
+        const ownedRedef = findContext(ctx, 'OwnedRedefinitionContext', 0);
+        if (ownedRedef) {
+            const redefText = ownedRedef.getText?.();
+            if (redefText) {
+                // Extract the last identifier from qualified name chains like "Vehicle::cargoMass"
+                const parts = redefText.split('::');
+                const lastPart = parts[parts.length - 1];
+                if (lastPart && !KEYWORDS.has(lastPart.toLowerCase())) {
+                    return `redefines ${lastPart}`;
+                }
+            }
+        }
+
+        // Check for RedefinesContext (explicit "redefines" keyword with target)
+        const redefinesCtx = findContext(ctx, 'RedefinesContext', 0);
+        if (redefinesCtx) {
+            const redefText = redefinesCtx.getText?.();
+            if (redefText) {
+                // Extract target after "redefines" or ":>>"
+                const match = redefText.match(/(?:redefines|:>>)(.+)/i);
+                if (match && match[1]) {
+                    const parts = match[1].split('::');
+                    const lastPart = parts[parts.length - 1].trim();
+                    if (lastPart && !KEYWORDS.has(lastPart.toLowerCase())) {
+                        return `redefines ${lastPart}`;
+                    }
+                }
+            }
+        }
+
+        // Check for OwnedSubsettingContext
+        const subsettingCtx = findContext(ctx, 'OwnedSubsettingContext', 0);
+        if (subsettingCtx) {
+            const subText = subsettingCtx.getText?.();
+            if (subText) {
+                const parts = subText.split('::');
+                const lastPart = parts[parts.length - 1];
+                if (lastPart && !KEYWORDS.has(lastPart.toLowerCase())) {
+                    return `subsets ${lastPart}`;
+                }
+            }
+        }
+
+        // Strategy 5: Generate synthetic names for connections, flows, allocations, transitions
+        // These are often anonymous but have structural endpoints we can use
+        const ctxTypeName = ctx?.constructor?.name || '';
+
+        // For ConnectionUsageContext: "connect source to target" → "source → target"
+        if (ctxTypeName === 'ConnectionUsageContext') {
+            // DEBUG: Log when we enter this code path (v2 marker)
+            const connectorPartCtx = ctx.connectorPart?.();
+            if (connectorPartCtx) {
+                const binaryCtx = connectorPartCtx.binaryConnectorPart?.();
+                if (binaryCtx) {
+                    const endMembers = binaryCtx.connectorEndMember_list?.() || binaryCtx.connectorEndMember?.();
+                    if (Array.isArray(endMembers) && endMembers.length >= 2) {
+                        const source = endMembers[0].getText?.() || '';
+                        const target = endMembers[1].getText?.() || '';
+                        if (source && target) {
+                            return `${source} → ${target}`;
                         }
-                        if (grandchild.text && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(grandchild.text)) {
-                            const text = grandchild.text;
-                            if (!KEYWORDS.has(text.toLowerCase())) {
-                                return text;
+                    }
+                }
+            }
+        }
+
+        // For FlowUsageContext: "flow source to target" → "source → target"
+        if (ctxTypeName === 'FlowUsageContext') {
+            // FlowUsage uses flowDeclaration -> flowEndMember_list
+            const flowDeclCtx = ctx.flowDeclaration?.();
+            if (flowDeclCtx) {
+                const endMembers = flowDeclCtx.flowEndMember_list?.() || flowDeclCtx.flowEndMember?.();
+                if (Array.isArray(endMembers) && endMembers.length >= 2) {
+                    const source = endMembers[0].getText?.() || '';
+                    const target = endMembers[1].getText?.() || '';
+                    if (source && target) {
+                        return `${source} → ${target}`;
+                    }
+                }
+            }
+        }
+
+        // For AllocationUsageContext: "allocate source to target" → "source → target"
+        if (ctxTypeName === 'AllocationUsageContext') {
+            // AllocationUsage uses allocationUsageDeclaration -> connectorPart -> binaryConnectorPart -> connectorEndMember_list
+            const allocDeclCtx = ctx.allocationUsageDeclaration?.();
+            if (allocDeclCtx) {
+                const connectorPartCtx = allocDeclCtx.connectorPart?.();
+                if (connectorPartCtx) {
+                    const binaryCtx = connectorPartCtx.binaryConnectorPart?.();
+                    if (binaryCtx) {
+                        const endMembers = binaryCtx.connectorEndMember_list?.() || binaryCtx.connectorEndMember?.();
+                        if (Array.isArray(endMembers) && endMembers.length >= 2) {
+                            const source = endMembers[0].getText?.() || '';
+                            const target = endMembers[1].getText?.() || '';
+                            if (source && target) {
+                                return `${source} → ${target}`;
                             }
                         }
                     }
                 }
             }
         }
+
+        // For TransitionUsageContext: "transition initial then off" → "initial → off"
+        // Grammar: TRANSITION (usageDeclaration? FIRST)? featureChainMember ... THEN transitionSuccessionMember
+        if (ctxTypeName === 'TransitionUsageContext') {
+            // Source is in featureChainMember, target is in transitionSuccessionMember
+            const sourceCtx = ctx.featureChainMember?.();
+            const targetCtx = ctx.transitionSuccessionMember?.();
+            if (sourceCtx && targetCtx) {
+                const source = sourceCtx.getText?.() || '';
+                const target = targetCtx.getText?.() || '';
+                if (source && target) {
+                    return `${source} → ${target}`;
+                }
+            }
+        }
+
+        // For ConstraintUsageContext: try to extract meaningful constraint expression
+        // Grammar: CONSTRAINT constraintUsageDeclaration calculationBody
+        if (ctxTypeName === 'ConstraintUsageContext') {
+            // Use calculationBody which contains the constraint expression
+            const bodyCtx = ctx.calculationBody?.() || ctx.usageBody?.() || ctx.definitionBody?.();
+            if (bodyCtx) {
+                const fullText = bodyCtx.getText?.() || '';
+                // Extract the expression inside { } - limit to reasonable length
+                const match = fullText.match(/^\{(.{1,50})/);
+                if (match && match[1]) {
+                    const expr = match[1].replace(/\}.*$/, '').trim();
+                    if (expr) {
+                        return `assert ${expr}${expr.length > 40 ? '...' : ''}`;
+                    }
+                }
+            }
+        }
+
+        // For AssertConstraintUsageContext: "assert constraint { expr }" → "assert expr"
+        if (ctxTypeName === 'AssertConstraintUsageContext') {
+            const fullText = ctx.getText?.() || '';
+            // Extract expression from assert constraint { ... }
+            const match = fullText.match(/\{([^}]+)\}/);
+            if (match && match[1]) {
+                const expr = match[1].trim();
+                const preview = expr.length > 40 ? `${expr.substring(0, 40)}...` : expr;
+                return `assert {${preview}}`;
+            }
+        }
+
+        // Strategy 6: Provide descriptive fallback for anonymous use-case related elements
+        // These are elements like "subject ;" or "actor ;" that serve as placeholders
+        const anonymousTypeMap: Record<string, string> = {
+            'SubjectUsageContext': '(anonymous subject)',
+            'ActorUsageContext': '(anonymous actor)',
+            'StakeholderUsageContext': '(anonymous stakeholder)',
+            'ObjectiveRequirementUsageContext': '(anonymous objective)',
+            'FrameConcernUsageContext': '(anonymous concern)',
+            'ConcernDefinitionContext': '(anonymous concern)',
+            'RenderingUsageContext': '(anonymous rendering)',
+            'ViewUsageContext': '(anonymous view)',
+            'ViewpointUsageContext': '(anonymous viewpoint)',
+        };
+        if (ctxTypeName in anonymousTypeMap) {
+            return anonymousTypeMap[ctxTypeName];
+        }
+
         return 'unnamed';
     }
 
@@ -1055,7 +1263,7 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
     }
 
     // Visit methods for different SysML constructs
-    visitPackageElement(ctx: any): void {
+    visitPackage(ctx: any): void {
         const name = this.getElementName(ctx);
         this.currentNamespace.push(name);
 
@@ -1245,26 +1453,33 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
     }
 
     visitDefinition(ctx: any): void {
-        // Generic definition handler - creates element based on context
-        // This handles bare "def Name" declarations without specific type keywords
-        const element = this.createElement('definition', ctx);
-        element.attributes.set('isDefinition', 'true');
-
-        // Extract visibility
-        const visibility = this.extractVisibility(ctx);
-        if (visibility) {
-            element.attributes.set('visibility', visibility);
+        // definition is an intermediate grammar rule used by partDefinition, connectionDefinition, etc.
+        // Do NOT create an element here — the parent visitor (e.g., visitPartDefinition) already created one.
+        // Instead, extract specialization from definitionDeclaration → subclassificationPart
+        // and attach it to the current parent element.
+        try {
+            const declCtx = ctx.definitionDeclaration?.();
+            if (declCtx) {
+                const subclassCtx = declCtx.subclassificationPart?.();
+                if (subclassCtx && this.parentStack.length > 0) {
+                    const parent = this.parentStack[this.parentStack.length - 1];
+                    const text = subclassCtx.getText?.() || '';
+                    // subclassificationPart text looks like ":>PowerSource" or ":>A,:>B"
+                    const targets = text.split(',').map((t: string) => t.replace(/^:>\s*/, '').trim()).filter(Boolean);
+                    for (const target of targets) {
+                        parent.relationships.push({
+                            type: 'specializes',
+                            source: parent.name,
+                            target: target
+                        });
+                    }
+                }
+            }
+        } catch {
+            // Silently continue if specialization extraction fails
         }
 
-        // Extract specialization
-        const specialization = this.extractSpecialization(ctx);
-        if (specialization) {
-            element.attributes.set('specialization', specialization);
-        }
-
-        this.parentStack.push(element);
         this.visitChildren(ctx);
-        this.parentStack.pop();
     }
 
     visitIndividualDefinition(ctx: any): void {
@@ -1272,18 +1487,6 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         const element = this.createElement('individual', ctx);
         element.attributes.set('isDefinition', 'true');
         element.attributes.set('isIndividual', 'true');
-
-        // Extract visibility
-        const visibility = this.extractVisibility(ctx);
-        if (visibility) {
-            element.attributes.set('visibility', visibility);
-        }
-
-        // Extract specialization
-        const specialization = this.extractSpecialization(ctx);
-        if (specialization) {
-            element.attributes.set('specialization', specialization);
-        }
 
         this.parentStack.push(element);
         this.visitChildren(ctx);
@@ -1304,122 +1507,135 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         this.parentStack.pop();
     }
 
-    visitStateTransition(ctx: any): void {
+    visitTransitionUsage(ctx: any): void {
         const element = this.createElement('transition', ctx);
         let fromState: string | null = null;
         let toState: string | null = null;
 
-        // Extract from state (if present)
-        if (ctx.fromState && typeof ctx.fromState === 'function') {
-            try {
-                const fromCtx = ctx.fromState();
-                if (fromCtx) {
-                    // Try multiple ways to get the identifier text
-                    if (fromCtx.identifier && typeof fromCtx.identifier === 'function') {
-                        const idCtx = fromCtx.identifier();
-                        if (idCtx) {
-                            // Check if it's an array
-                            const idNode = Array.isArray(idCtx) ? idCtx[0] : idCtx;
-                            if (idNode && typeof idNode.getText === 'function') {
-                                fromState = idNode.getText();
-                            } else if (idNode && idNode.text) {
-                                fromState = idNode.text;
-                            } else if (typeof idNode === 'string') {
-                                fromState = idNode;
-                            }
-                        }
-                    } else if (typeof fromCtx.getText === 'function') {
-                        // Fallback: get text directly from fromState context (includes 'first' keyword)
-                        const text = fromCtx.getText();
-                        // Remove 'first' keyword if present
-                        fromState = text.replace(/^first\s*/i, '');
-                    }
-                    if (fromState) {
-                        element.attributes.set('fromState', fromState);
+        // Grammar rule: transitionUsage
+        //   : TRANSITION ( usageDeclaration FIRST )? featureChainMember emptyParameterMember
+        //     ( emptyParameterMember triggerActionMember )? ( guardExpressionMember )?
+        //     ( effectBehaviorMember )? THEN transitionSuccessionMember actionBody
+        //
+        // Source state: featureChainMember (after FIRST or after TRANSITION name FIRST)
+        // Target state: transitionSuccessionMember → transitionSuccession → emptyEndMember connectorEndMember
+
+        // Extract source state from featureChainMember
+        try {
+            const featureChainCtx = ctx.featureChainMember?.();
+            if (featureChainCtx) {
+                const chainCtx = Array.isArray(featureChainCtx) ? featureChainCtx[0] : featureChainCtx;
+                if (chainCtx) {
+                    fromState = chainCtx.getText?.() || null;
+                }
+            }
+        } catch {
+            // Silently continue
+        }
+
+        // Extract target state from transitionSuccessionMember
+        try {
+            const succMemberCtx = ctx.transitionSuccessionMember?.();
+            if (succMemberCtx) {
+                const succCtx = succMemberCtx.transitionSuccession?.();
+                if (succCtx) {
+                    // transitionSuccession = emptyEndMember connectorEndMember
+                    const connEndCtx = succCtx.connectorEndMember?.();
+                    if (connEndCtx) {
+                        toState = connEndCtx.getText?.() || null;
                     }
                 }
+                if (!toState) {
+                    // Fallback: get full text and clean up
+                    toState = succMemberCtx.getText?.() || null;
+                }
+            }
+        } catch {
+            // Silently continue
+        }
+
+        // Fallback: parse from raw text if grammar accessors fail
+        if (!fromState || !toState) {
+            try {
+                const text = ctx.getText?.() || '';
+                // Pattern: transition name first SOURCE ... then TARGET ;
+                const match = text.match(/(?:first|FIRST)\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s.*?(?:then|THEN)\s*([a-zA-Z_][a-zA-Z0-9_.]*)/);
+                if (match) {
+                    if (!fromState) fromState = match[1];
+                    if (!toState) toState = match[2];
+                }
             } catch {
-                // Silently continue on extraction errors
+                // Silently continue
             }
         }
 
-        // Extract to state
-        if (ctx.toState && typeof ctx.toState === 'function') {
-            try {
-                const toCtx = ctx.toState();
-                if (toCtx) {
-                    // Try multiple ways to get the identifier text
-                    if (toCtx.identifier && typeof toCtx.identifier === 'function') {
-                        const idCtx = toCtx.identifier();
-                        if (idCtx) {
-                            // Check if it's an array
-                            const idNode = Array.isArray(idCtx) ? idCtx[0] : idCtx;
-                            if (idNode && typeof idNode.getText === 'function') {
-                                toState = idNode.getText();
-                            } else if (idNode && idNode.text) {
-                                toState = idNode.text;
-                            } else if (typeof idNode === 'string') {
-                                toState = idNode;
-                            }
-                        }
-                    } else if (typeof toCtx.getText === 'function') {
-                        // Fallback: get text directly from toState context (includes 'then'/'to' keyword)
-                        const text = toCtx.getText();
-                        // Remove 'then' or 'to' keyword if present
-                        toState = text.replace(/^(then|to)\s*/i, '');
-                    }
-                    if (toState) {
-                        element.attributes.set('toState', toState);
-                    }
-                }
-            } catch {
-                // Silently continue on extraction errors
-            }
+        if (fromState) {
+            element.attributes.set('fromState', fromState);
+        }
+        if (toState) {
+            element.attributes.set('toState', toState);
         }
 
-        // Also add transition to relationships for use by views that query relationships
+        // Add transition to relationships for use by views that query relationships
         if (fromState && toState) {
             this.relationships.push({
                 type: 'transition',
                 source: fromState,
-                target: toState
+                target: toState,
+                name: element.name || 'transition'
             });
         }
 
         // Extract trigger condition (if present)
-        if (ctx.transitionTrigger && typeof ctx.transitionTrigger === 'function') {
-            try {
-                const triggerCtx = ctx.transitionTrigger();
-                if (triggerCtx && triggerCtx.expression && typeof triggerCtx.expression === 'function') {
-                    const exprCtx = triggerCtx.expression();
-                    if (exprCtx && typeof exprCtx.getText === 'function') {
-                        element.attributes.set('trigger', exprCtx.getText());
-                    }
+        try {
+            const triggerCtx = ctx.triggerActionMember?.();
+            if (triggerCtx) {
+                const text = triggerCtx.getText?.() || '';
+                if (text) {
+                    element.attributes.set('trigger', text.replace(/^accept\s*/i, '').trim());
                 }
-            } catch {
-                // transitionTrigger() can throw if node doesn't exist due to parse errors
             }
+        } catch {
+            // Silently continue
+        }
+
+        // Extract guard expression (if present)
+        try {
+            const guardCtx = ctx.guardExpressionMember?.();
+            if (guardCtx) {
+                const text = guardCtx.getText?.() || '';
+                if (text) {
+                    element.attributes.set('guard', text.replace(/^if\s*/i, '').trim());
+                }
+            }
+        } catch {
+            // Silently continue
+        }
+
+        // Generate a descriptive name for anonymous transitions
+        if (element.name === 'unnamed' && fromState && toState) {
+            element.name = `${fromState} → ${toState}`;
         }
 
         this.visitChildren(ctx);
     }
 
-    // Fork usage: fork forkName;
-    visitForkUsage(ctx: any): void {
+    // Fork node: fork forkName;
+    visitForkNode(ctx: any): void {
         const element = this.createElement('fork', ctx);
         element.attributes.set('nodeType', 'fork');
         element.attributes.set('isControlNode', 'true');
     }
 
-    // Join usage: join joinName;
-    visitJoinUsage(ctx: any): void {
+    // Join node: join joinName;
+    visitJoinNode(ctx: any): void {
         const element = this.createElement('join', ctx);
         element.attributes.set('nodeType', 'join');
         element.attributes.set('isControlNode', 'true');
     }
 
     // First statement: first source then target; - creates a control flow
-    visitFirstStatement(ctx: any): void {
+    visitDefaultTargetSuccession(ctx: any): void {
         // Extract source (first qualifiedName)
         let source: string | null = null;
         let target: string | null = null;
@@ -1451,7 +1667,7 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
     }
 
     // Then statement with fork/join: then fork forkName; or then join joinName;
-    visitThenStatement(ctx: any): void {
+    visitTargetSuccession(ctx: any): void {
         // Check for FORK or JOIN tokens
         const text = ctx.getText ? ctx.getText() : '';
 
@@ -1505,6 +1721,7 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         this.parentStack.pop();
     }
 
+    // DEAD CODE: No 'actorDefinition' rule in new grammar; actors are usages, not definitions
     visitActorDefinition(ctx: any): void {
         const element = this.createElement('actor def', ctx);
         this.parentStack.push(element);
@@ -1542,12 +1759,42 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
             if (fromAttr && toAttr) {
                 element.attributes.set('from', fromAttr);
                 element.attributes.set('to', toAttr);
+
+                // Generate meaningful name for anonymous interface usages
+                if (element.name === 'unnamed') {
+                    element.name = `${fromAttr} ↔ ${toAttr}`;
+                }
+            }
+        }
+
+        // Fallback: extract endpoints directly from ANTLR context for
+        // "interface connect A to B;" syntax where no connect children are created
+        if (element.name === 'unnamed') {
+            try {
+                const declCtx = ctx.interfaceUsageDeclaration?.();
+                const partCtx = declCtx?.interfacePart?.();
+                const binaryCtx = partCtx?.binaryInterfacePart?.();
+                const ends = binaryCtx?.interfaceEndMember_list?.();
+                if (ends && ends.length >= 2) {
+                    const fromRef = this.extractQualifiedName(ends[0]?.interfaceEnd?.()?.ownedReferenceSubsetting?.()) || 'unknown';
+                    const toRef = this.extractQualifiedName(ends[1]?.interfaceEnd?.()?.ownedReferenceSubsetting?.()) || 'unknown';
+                    element.attributes.set('from', fromRef);
+                    element.attributes.set('to', toRef);
+                    element.name = `${fromRef} ↔ ${toRef}`;
+                }
+            } catch {
+                // Fallback: extract from raw text
+                const fullText = ctx.getText?.() || '';
+                const match = fullText.match(/connect([a-zA-Z0-9_.:']+)to([a-zA-Z0-9_.:']+)/);
+                if (match) {
+                    element.name = `${match[1]} ↔ ${match[2]}`;
+                }
             }
         }
     }
 
     visitConstraintDefinition(ctx: any): void {
-        const element = this.createElement('constraint', ctx);
+        const element = this.createElement('constraint def', ctx);
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
@@ -1555,6 +1802,26 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
 
     visitConstraintUsage(ctx: any): void {
         const element = this.createElement('constraint', ctx);
+
+        // Generate a preview name for anonymous constraints
+        if (element.name === 'unnamed') {
+            try {
+                const text = ctx.getText?.() || '';
+                // Extract constraint expression between { }
+                const match = text.match(/\{([^}]+)\}/);
+                if (match) {
+                    let expr = match[1].trim();
+                    // Truncate long expressions
+                    if (expr.length > 30) {
+                        expr = `${expr.substring(0, 30)}...`;
+                    }
+                    element.name = `{${expr}}`;
+                }
+            } catch {
+                // Keep unnamed
+            }
+        }
+
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
@@ -1620,31 +1887,60 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         this.visitChildren(ctx);
         this.parentStack.pop();
 
-        // Try to extract inline connection syntax: connect X to Y; or connect X.port to Y.port;
-        const fullText = ctx.getText?.() || '';
+        // Try to extract inline connection syntax using grammar tree
+        // connectionUsage: ... CONNECT connectorPart ... which has binaryConnectorPart: connectorEndMember TO connectorEndMember
+        let sourceRef = '';
+        let targetRef = '';
+        try {
+            const connectorPartCtx = ctx.connectorPart?.();
+            if (connectorPartCtx) {
+                const binaryCtx = connectorPartCtx.binaryConnectorPart?.();
+                if (binaryCtx) {
+                    // Use _list accessor for repeated rule elements
+                    const endMembers = binaryCtx.connectorEndMember_list?.() || binaryCtx.connectorEndMember?.();
+                    if (Array.isArray(endMembers) && endMembers.length >= 2) {
+                        sourceRef = endMembers[0].getText?.() || '';
+                        targetRef = endMembers[1].getText?.() || '';
+                        if (sourceRef && targetRef) {
+                            element.attributes.set('from', sourceRef);
+                            element.attributes.set('to', targetRef);
+                            this.relationships.push({
+                                type: 'connection',
+                                source: sourceRef,
+                                target: targetRef,
+                                name: element.name || 'connect'
+                            });
+                        }
+                    }
+                }
+            }
+        } catch {
+            // Silently continue on extraction errors
+        }
 
-        // Pattern for inline connect: connect source to target (with optional qualifiers and multiplicities)
-        // Examples:
-        //   connect speedSensor.speedSensorPort to vehicleSoftware.vehicleController.cruiseController.speedSensorPort;
-        //   connect [1] wheel1.lugNutCompositePort to [1] hub1.shankCompositePort;
-        const inlineConnectMatch = fullText.match(/connect\s*(?:\[[^\]]*\])?\s*([a-zA-Z0-9_.]+)\s+to\s*(?:\[[^\]]*\])?\s*([a-zA-Z0-9_.]+)/i);
+        // Fallback: try regex on raw text
+        if (!element.attributes.has('from')) {
+            const fullText = ctx.getText?.() || '';
+            const inlineConnectMatch = fullText.match(/connect\s*(?:\[[^\]]*\])?\s*([a-zA-Z0-9_.]+)\s*to\s*(?:\[[^\]]*\])?\s*([a-zA-Z0-9_.]+)/i);
+            if (inlineConnectMatch) {
+                sourceRef = inlineConnectMatch[1];
+                targetRef = inlineConnectMatch[2];
+                element.attributes.set('from', sourceRef);
+                element.attributes.set('to', targetRef);
+                this.relationships.push({
+                    type: 'connection',
+                    source: sourceRef,
+                    target: targetRef,
+                    name: element.name || 'connect'
+                });
+            }
+        }
 
-        if (inlineConnectMatch) {
-            const sourceRef = inlineConnectMatch[1];
-            const targetRef = inlineConnectMatch[2];
-
-            // Store in element attributes for visualization
-            element.attributes.set('from', sourceRef);
-            element.attributes.set('to', targetRef);
-
-            // Also add as a relationship
-            this.relationships.push({
-                type: 'connection',
-                source: sourceRef,
-                target: targetRef,
-                name: element.name || 'connect'
-            });
-            return; // Don't process ends if inline syntax found
+        // Generate meaningful name for anonymous connections
+        if (element.name === 'unnamed' && element.attributes.has('from') && element.attributes.has('to')) {
+            const from = element.attributes.get('from') as string;
+            const to = element.attributes.get('to') as string;
+            element.name = `${from} → ${to}`;
         }
 
         // After visiting children (which populates 'end' elements), extract endpoints
@@ -1676,11 +1972,26 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
                     target: targetRef,
                     name: element.name || 'connect'
                 });
+
+                // Also name the connection from its end endpoints if still unnamed
+                // This handles derivation connections: #derivation connection { end X; end Y; }
+                if (element.name === 'unnamed') {
+                    element.name = `${sourceRef} → ${targetRef}`;
+                }
             }
         }
     }
 
-    visitEndFeature(ctx: any): void {
+    visitConnectorEndMember(ctx: any): void {
+        // Only create 'end' elements when inside a connection (not transitions/successions)
+        // connectorEndMember is used in both connections and transition successions,
+        // but we only want explicit 'end' elements for connections.
+        const isInConnection = this.parentStack.some(p => p.type === 'connection');
+        if (!isInConnection) {
+            // Don't create end elements for transitions or other non-connection contexts
+            return;
+        }
+
         // Parse end features for connection endpoints: end name : qualified.reference;
         const attributes = new Map<string, any>();
 
@@ -1702,10 +2013,174 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
             }
         }
 
-        this.createElement('end', ctx, attributes);
+        // Also try ownedReferenceSubsetting for ::> syntax (derivation connections)
+        // Grammar: connectorEnd: (name (::>|references))? ownedReferenceSubsetting
+        if (!attributes.has('targetRef')) {
+            try {
+                // Get the connectorEnd child first
+                const connectorEndCtx = ctx.connectorEnd?.() || ctx;
+
+                // Try getting ownedReferenceSubsetting
+                const refSubsettingCtx = connectorEndCtx.ownedReferenceSubsetting?.();
+                if (refSubsettingCtx) {
+                    const text = refSubsettingCtx.getText?.() || '';
+                    if (text) {
+                        // Clean up - remove any leading punctuation
+                        const reference = text.replace(/^[:.>]+/, '').trim();
+                        attributes.set('targetRef', reference);
+                        attributes.set('references', reference);
+                    }
+                }
+
+                // Fallback: try just getting the whole text and extracting the reference
+                if (!attributes.has('targetRef')) {
+                    const fullText = ctx.getText?.() || '';
+                    // Pattern: end #name ::> some.reference
+                    const match = fullText.match(/::>\s*([a-zA-Z0-9_.\[\]]+)/);
+                    if (match) {
+                        attributes.set('targetRef', match[1]);
+                        attributes.set('references', match[1]);
+                    }
+                }
+            } catch {
+                // Silently continue
+            }
+        }
+
+        const element = this.createElement('end', ctx, attributes);
+
+        // Give the end element a meaningful name from its targetRef
+        const targetRef = attributes.get('targetRef') as string;
+        if (element.name === 'unnamed' && targetRef) {
+            element.name = `end: ${targetRef}`;
+        }
     }
 
-    visitRedefinitionUsage(ctx: any): void {
+    visitEndFeatureUsage(ctx: any): void {
+        // Handle explicit 'end' declarations in connection/flow/interface bodies
+        // Syntax: end #name ::> qualified.reference;
+        // This is used for derivation connections and similar block-style connections
+        const isInConnection = this.parentStack.some(p => p.type === 'connection');
+
+        if (!isInConnection) {
+            // Not inside a connection, just visit children normally
+            this.visitChildren(ctx);
+            return;
+        }
+
+        const attributes = new Map<string, any>();
+
+        // Try to extract the target reference from the full text
+        // Pattern: end #name ::> qualified.reference
+        const fullText = ctx.getText?.() || '';
+
+        // Try ::> pattern first (ownedReferenceSubsetting)
+        let match = fullText.match(/::>\s*([a-zA-Z0-9_.\[\]]+)/);
+        if (match) {
+            attributes.set('targetRef', match[1]);
+            attributes.set('references', match[1]);
+        }
+
+        // Also try :> pattern (ownedSubsetting)
+        if (!attributes.has('targetRef')) {
+            match = fullText.match(/:>\s*([a-zA-Z0-9_.\[\]]+)/);
+            if (match) {
+                attributes.set('targetRef', match[1]);
+                attributes.set('references', match[1]);
+            }
+        }
+
+        // Also try : pattern (typing)
+        if (!attributes.has('targetRef')) {
+            match = fullText.match(/:\s*([a-zA-Z0-9_.\[\]]+)/);
+            if (match) {
+                attributes.set('targetRef', match[1]);
+                attributes.set('references', match[1]);
+            }
+        }
+
+        const element = this.createElement('end', ctx, attributes);
+
+        // Give the end element a meaningful name from its targetRef
+        const targetRef = attributes.get('targetRef') as string;
+        if (element.name === 'unnamed' && targetRef) {
+            element.name = `end: ${targetRef}`;
+        }
+    }
+
+    visitExtendedUsage(ctx: any): void {
+        // Handle 'end' statements that are parsed as ExtendedUsage
+        // Grammar structure: ExtendedUsageContext has children:
+        //   [0] UnextendedUsagePrefixContext with text "end"
+        //   [1] UsageExtensionKeywordContext with text "#name"
+        //   [2] UsageContext with "::>..." or other subsetting
+
+        const children = ctx.children || [];
+        if (children.length === 0) {
+            this.visitChildren(ctx);
+            return;
+        }
+
+        // Check if first child is an 'end' prefix
+        const firstChild = children[0];
+        const prefixText = firstChild?.getText?.() || '';
+
+        if (prefixText.toLowerCase() !== 'end') {
+            // Not an 'end' statement, just visit children
+            this.visitChildren(ctx);
+            return;
+        }
+
+        // This is an 'end' statement - check if we're inside a connection
+        const isInConnection = this.parentStack.some(p => p.type === 'connection');
+        if (!isInConnection) {
+            this.visitChildren(ctx);
+            return;
+        }
+
+        const attributes = new Map<string, any>();
+
+        // Get name from UsageExtensionKeywordContext (second child, e.g., "#original")
+        if (children.length > 1) {
+            const nameChild = children[1];
+            const nameText = nameChild?.getText?.() || '';
+            // Remove leading # if present
+            if (nameText.startsWith('#')) {
+                attributes.set('shortname', nameText.substring(1));
+            } else if (nameText) {
+                attributes.set('shortname', nameText);
+            }
+        }
+
+        // Get targetRef from the full text (::> or :> pattern)
+        const fullText = ctx.getText?.() || '';
+        let match = fullText.match(/::>\s*([a-zA-Z0-9_.\[\]]+)/);
+        if (match) {
+            attributes.set('targetRef', match[1]);
+            attributes.set('references', match[1]);
+        } else {
+            match = fullText.match(/:>\s*([a-zA-Z0-9_.\[\]]+)/);
+            if (match) {
+                attributes.set('targetRef', match[1]);
+                attributes.set('references', match[1]);
+            }
+        }
+
+        const element = this.createElement('end', ctx, attributes);
+
+        // Give the end element a name from shortname or targetRef
+        const shortname = attributes.get('shortname') as string;
+        const targetRef = attributes.get('targetRef') as string;
+        if (element.name === 'unnamed') {
+            if (shortname) {
+                element.name = `end #${shortname}`;
+            } else if (targetRef) {
+                element.name = `end: ${targetRef}`;
+            }
+        }
+    }
+
+    visitOwnedRedefinition(ctx: any): void {
         // Parse redefinition usage: :>> name { ... } or :>> name = value;
         // This is shorthand for 'redefines' - redefining a feature from supertype
         const attributes = new Map<string, any>();
@@ -1750,7 +2225,7 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         }
     }
 
-    visitFlowProperty(ctx: any): void {
+    visitFlowUsage(ctx: any): void {
         // Parse flow property: flow property name : Type direction in/out/inout;
         const attributes = new Map<string, any>();
         attributes.set('isFlowProperty', 'true');
@@ -1767,21 +2242,68 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
             }
         }
 
-        this.createElement('flowProperty', ctx, attributes);
+        const element = this.createElement('flowProperty', ctx, attributes);
+
+        // Generate meaningful name for anonymous flows
+        if (element.name === 'unnamed') {
+            const fullText = ctx.getText?.() || '';
+            // Match patterns like: flow source to target or flow of Type from source to target
+            const flowMatch = fullText.match(/flow\s+(?:of\s+\w+\s+)?(?:from\s+)?([a-zA-Z0-9_.]+)\s+to\s+([a-zA-Z0-9_.]+)/i);
+            if (flowMatch) {
+                element.name = `${flowMatch[1]} → ${flowMatch[2]}`;
+                element.attributes.set('from', flowMatch[1]);
+                element.attributes.set('to', flowMatch[2]);
+            } else {
+                // Fallback: extract "flow of Type" (no from/to) from ANTLR context
+                try {
+                    const declCtx = ctx.flowDeclaration?.();
+                    if (declCtx) {
+                        // Navigate: flowDeclaration → flowPayloadFeatureMember → ... → ownedFeatureTyping → qualifiedName
+                        const payloadMember = declCtx.flowPayloadFeatureMember?.();
+                        const payloadFeature = payloadMember?.flowPayloadFeature?.()?.payloadFeature?.();
+                        const typingCtx = payloadFeature?.ownedFeatureTyping?.();
+                        const qnText = typingCtx?.getText?.();
+                        if (qnText) {
+                            element.name = `flow of ${qnText}`;
+                            element.attributes.set('flowType', qnText);
+                        }
+                    }
+                } catch {
+                    // Ignore ANTLR extraction errors
+                }
+            }
+            // Final regex fallback on getText() which strips whitespace
+            if (element.name === 'unnamed') {
+                const ofMatch = fullText.match(/^flowof([a-zA-Z0-9_.:' -]+)/i);
+                if (ofMatch) {
+                    element.name = `flow of ${ofMatch[1]}`;
+                }
+            }
+        }
     }
 
-    visitInteractionDefinition(ctx: any): void {
+    visitFlowDefinition(ctx: any): void {
+        const element = this.createElement('flow def', ctx);
+        element.attributes.set('isDefinition', 'true');
+        this.parentStack.push(element);
+        this.visitChildren(ctx);
+        this.parentStack.pop();
+    }
+
+    visitInteraction(ctx: any): void {
         const element = this.createElement('interaction', ctx);
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
     }
 
+    // DEAD CODE: No 'interactionUsage' rule in new grammar
     visitInteractionUsage(ctx: any): void {
         this.createElement('interaction', ctx);
         this.visitChildren(ctx);
     }
 
+    // DEAD CODE: No 'participant' rule in new grammar; participants are modeled as usages
     visitParticipant(ctx: any): void {
         this.createElement('participant', ctx);
         this.visitChildren(ctx);
@@ -1816,21 +2338,114 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         this.visitChildren(ctx);
     }
 
-    visitCommentElement(ctx: any): void {
-        this.createElement('comment', ctx);
-        this.visitChildren(ctx);
-    }
+    // Note: visitCommentElement removed - merged into visitComment below
 
     visitComment(ctx: any): void {
-        this.createElement('comment', ctx);
+        // Extract comment text to use as a meaningful name
+        const commentText = this.extractCommentText(ctx);
+        const attributes = new Map<string, any>();
+        if (commentText) {
+            attributes.set('text', commentText);
+        }
+
+        // Create element with custom name extraction for comments
+        const name = this.getCommentName(ctx, commentText);
+        const range = this.getRange(ctx);
+
+        const element: SysMLElement = {
+            type: 'comment',
+            name,
+            range,
+            children: [],
+            attributes,
+            relationships: []
+        };
+
+        // Add to parent or root
+        if (this.parentStack.length > 0) {
+            this.parentStack[this.parentStack.length - 1].children.push(element);
+        } else {
+            this.rootElements.push(element);
+        }
+
+        this.parentStack.push(element);
         this.visitChildren(ctx);
+        this.parentStack.pop();
     }
 
-    visitDocElement(ctx: any): void {
-        // Instead of creating a separate 'doc' element, propagate doc content to parent
-        this.extractDocContentToParent(ctx);
-        this.visitChildren(ctx);
+    /**
+     * Extract the comment text from a comment context.
+     */
+    private extractCommentText(ctx: any): string {
+        try {
+            // Look for REGULAR_COMMENT token
+            if (ctx.REGULAR_COMMENT && typeof ctx.REGULAR_COMMENT === 'function') {
+                const commentToken = ctx.REGULAR_COMMENT();
+                if (commentToken?.text) {
+                    let text = commentToken.text;
+                    // Remove /* and */ markers
+                    text = text.replace(/^\/\*+/, '').replace(/\*+\/$/, '');
+                    // Clean up leading * on each line and whitespace
+                    text = text.split('\n')
+                        .map((line: string) => line.replace(/^\s*\*\s?/, '').trim())
+                        .filter((line: string) => line.length > 0)
+                        .join(' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    return text;
+                }
+            }
+
+            // Fallback: try to get text from the whole context
+            const fullText = ctx.getText?.() || '';
+            const blockMatch = fullText.match(/\/\*[\s\S]*?\*\//);
+            if (blockMatch) {
+                let text = blockMatch[0];
+                text = text.replace(/^\/\*+/, '').replace(/\*+\/$/, '');
+                text = text.split('\n')
+                    .map((line: string) => line.replace(/^\s*\*\s?/, '').trim())
+                    .filter((line: string) => line.length > 0)
+                    .join(' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                return text;
+            }
+        } catch {
+            // Ignore errors in comment extraction
+        }
+        return '';
     }
+
+    /**
+     * Get a meaningful name for a comment element.
+     * Tries to use the identifier if present, otherwise creates a preview from the comment text.
+     */
+    private getCommentName(ctx: any, commentText: string): string {
+        // First try to get an explicit identifier
+        const explicitName = this.getElementName(ctx);
+        if (explicitName && explicitName !== 'unnamed') {
+            return explicitName;
+        }
+
+        // Use a truncated version of the comment text as the name
+        if (commentText) {
+            const maxLength = 40;
+            if (commentText.length <= maxLength) {
+                return commentText;
+            }
+            // Truncate at word boundary
+            const truncated = commentText.substring(0, maxLength);
+            const lastSpace = truncated.lastIndexOf(' ');
+            if (lastSpace > maxLength * 0.6) {
+                return `${truncated.substring(0, lastSpace)}...`;
+            }
+            return `${truncated}...`;
+        }
+
+        return '(comment)';
+    }
+
+    // Note: visitDocElement removed - merged into visitDocumentation below
 
     visitDocumentation(ctx: any): void {
         // Instead of creating a separate 'doc' element, propagate doc content to parent
@@ -1898,12 +2513,7 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         }
     }
 
-    visitCalculation(ctx: any): void {
-        const element = this.createElement('calc def', ctx);
-        this.parentStack.push(element);
-        this.visitChildren(ctx);
-        this.parentStack.pop();
-    }
+    // Note: visitCalculation removed - duplicate of visitCalculationDefinition
 
     visitEnumerationDefinition(ctx: any): void {
         const element = this.createElement('enumeration def', ctx);
@@ -1928,6 +2538,16 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
 
     visitItemUsage(ctx: any): void {
         const element = this.createElement('item', ctx);
+
+        // If unnamed, try to extract value binding (e.g., "in item = providePower.fuelCmd;")
+        if (element.name === 'unnamed') {
+            const fullText = ctx.getText?.() || '';
+            const valueMatch = fullText.match(/=\s*([a-zA-Z_][a-zA-Z0-9_.]*)/);
+            if (valueMatch) {
+                element.name = `item = ${valueMatch[1]}`;
+            }
+        }
+
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
@@ -1947,14 +2567,14 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         this.parentStack.pop();
     }
 
-    visitAnalysisDefinition(ctx: any): void {
+    visitAnalysisCaseDefinition(ctx: any): void {
         const element = this.createElement('analysis def', ctx);
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
     }
 
-    visitAnalysisUsage(ctx: any): void {
+    visitAnalysisCaseUsage(ctx: any): void {
         const element = this.createElement('analysis', ctx);
         this.parentStack.push(element);
         this.visitChildren(ctx);
@@ -1973,6 +2593,45 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
+
+        // Try to extract allocation endpoints from grammar
+        // allocation: allocate qualifiedName to qualifiedName;
+        let qualifiedNames;
+        try {
+            qualifiedNames = ctx.qualifiedName ? ctx.qualifiedName() : [];
+        } catch {
+            qualifiedNames = [];
+        }
+        const qnArray = Array.isArray(qualifiedNames) ? qualifiedNames : (qualifiedNames ? [qualifiedNames] : []);
+
+        if (qnArray.length >= 2) {
+            const source = qnArray[0] && typeof qnArray[0].getText === 'function' ? qnArray[0].getText() : '';
+            const target = qnArray[1] && typeof qnArray[1].getText === 'function' ? qnArray[1].getText() : '';
+
+            if (source && target) {
+                element.attributes.set('from', source);
+                element.attributes.set('to', target);
+
+                // Generate meaningful name for anonymous allocations
+                if (element.name === 'unnamed') {
+                    element.name = `${source} → ${target}`;
+                }
+            }
+        }
+
+        // Fallback: try to extract from raw text
+        if (element.name === 'unnamed') {
+            const fullText = ctx.getText?.() || '';
+            // Match patterns like: allocate source to target
+            const allocateMatch = fullText.match(/allocate\s+([a-zA-Z0-9_.:]+)\s+to\s+([a-zA-Z0-9_.:]+)/i);
+            if (allocateMatch) {
+                const source = allocateMatch[1];
+                const target = allocateMatch[2];
+                element.attributes.set('from', source);
+                element.attributes.set('to', target);
+                element.name = `${source} → ${target}`;
+            }
+        }
     }
 
     visitMetadataDefinition(ctx: any): void {
@@ -1996,7 +2655,7 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         this.parentStack.pop();
     }
 
-    visitRequireStatement(ctx: any): void {
+    visitRequirementConstraintMember(ctx: any): void {
         // Handle: require qualifiedName; or require constraint name;
         const fullText = ctx.getText?.() || '';
         const isConstraint = fullText.toLowerCase().includes('constraint');
@@ -2004,23 +2663,83 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         if (isConstraint) {
             // Create a require constraint element
             const element = this.createElement('require constraint', ctx);
+
+            // Generate meaningful name for anonymous require constraints
+            if (element.name === 'unnamed') {
+                // Try to extract the constraint expression
+                const exprMatch = fullText.match(/\{([^}]*)\}/);
+                if (exprMatch) {
+                    const expr = exprMatch[1].trim();
+                    const preview = expr.length > 25 ? `${expr.substring(0, 25)}...` : expr;
+                    element.name = `{${preview}}`;
+                } else {
+                    // Try to get referenced constraint name (getText() strips whitespace)
+                    const refMatch = fullText.match(/^requireconstraint([a-zA-Z_][a-zA-Z0-9_]*)/i);
+                    if (refMatch) {
+                        element.name = `require: ${refMatch[1]}`;
+                    }
+                }
+            }
+
             this.parentStack.push(element);
             this.visitChildren(ctx);
             this.parentStack.pop();
         } else {
             // Create a require reference element
             const element = this.createElement('require', ctx);
+
+            // Generate meaningful name for anonymous require references
+            // Note: getText() strips whitespace, so don't require \s+ between 'require' and name
+            if (element.name === 'unnamed') {
+                // Try ANTLR context first: requirementConstraintUsage → ownedReferenceSubsetting → qualifiedName
+                try {
+                    const usageCtx = ctx.requirementConstraintUsage?.();
+                    const refSubCtx = usageCtx?.ownedReferenceSubsetting?.();
+                    const qnText = this.extractQualifiedName(refSubCtx);
+                    if (qnText) {
+                        element.name = `require: ${qnText}`;
+                    }
+                } catch {
+                    // ANTLR extraction failed, will fall back to regex below
+                }
+            }
+            // Fallback: regex on getText() — handles both unquoted and quoted names
+            if (element.name === 'unnamed') {
+                const refMatch = fullText.match(/^require([a-zA-Z_'][a-zA-Z0-9_.:' -]*)/i);
+                if (refMatch) {
+                    element.name = `require: ${refMatch[1]}`;
+                }
+            }
+
             this.parentStack.push(element);
             this.visitChildren(ctx);
             this.parentStack.pop();
         }
     }
 
-    visitObjectiveUsage(ctx: any): void {
+    visitObjectiveRequirementUsage(ctx: any): void {
         const element = this.createElement('objective', ctx);
+
+        // If still unnamed, try to extract type reference (e.g., "objective : MaximizeObjective;")
+        if (element.name === '(anonymous objective)' || element.name === 'unnamed') {
+            const fullText = ctx.getText?.() || '';
+            const typeMatch = fullText.match(/objective\s*:\s*([A-Za-z_][A-Za-z0-9_.]*)/);
+            if (typeMatch) {
+                element.name = `objective: ${typeMatch[1]}`;
+            }
+        }
+
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
+
+        // After visiting children, if still anonymous and has verify children, name from them
+        if ((element.name === '(anonymous objective)' || element.name === 'unnamed') && element.children.length > 0) {
+            const verifyChild = element.children.find(c => c.type === 'verify');
+            if (verifyChild && verifyChild.name !== 'unnamed') {
+                element.name = `objective`;
+            }
+        }
     }
 
     visitStakeholderUsage(ctx: any): void {
@@ -2030,6 +2749,7 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         this.parentStack.pop();
     }
 
+    // DEAD CODE: No 'allocateStatement' rule in new grammar; use visitAllocationUsage instead
     visitAllocateStatement(ctx: any): void {
         const element = this.createElement('allocate', ctx);
         // Extract from and to qualified names if available
@@ -2055,33 +2775,47 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
     }
 
     // Bind usage: bind sourceRef = targetRef;
-    visitBindUsage(ctx: any): void {
+    visitBindingConnectorAsUsage(ctx: any): void {
         const element = this.createElement('bind', ctx);
 
-        // Get qualified names: bind qn1 = qn2;
-        let qualifiedNames;
+        // Extract bind endpoints from ConnectorEndMember children
+        // Grammar: bind connectorEndMember = connectorEndMember ;
+        let source = '';
+        let target = '';
         try {
-            qualifiedNames = ctx.qualifiedName ? ctx.qualifiedName() : [];
+            const endMembers = ctx.connectorEndMember_list ? ctx.connectorEndMember_list() : [];
+            const endArray = Array.isArray(endMembers) ? endMembers : (endMembers ? [endMembers] : []);
+            if (endArray.length >= 2) {
+                source = endArray[0]?.getText?.() || '';
+                target = endArray[1]?.getText?.() || '';
+            }
         } catch {
-            qualifiedNames = [];
+            // Fall through to text-based extraction
         }
-        const qnArray = Array.isArray(qualifiedNames) ? qualifiedNames : (qualifiedNames ? [qualifiedNames] : []);
 
-        if (qnArray.length >= 2) {
-            const source = qnArray[0] && typeof qnArray[0].getText === 'function' ? qnArray[0].getText() : '';
-            const target = qnArray[1] && typeof qnArray[1].getText === 'function' ? qnArray[1].getText() : '';
+        // Fallback: extract from full text
+        if (!source || !target) {
+            const fullText = ctx.getText?.() || '';
+            const match = fullText.match(/bind\s*(.+?)\s*=\s*(.+?)\s*;/);
+            if (match) {
+                source = match[1].trim();
+                target = match[2].trim();
+            }
+        }
 
-            if (source && target) {
-                element.attributes.set('from', source);
-                element.attributes.set('to', target);
+        if (source && target) {
+            element.attributes.set('from', source);
+            element.attributes.set('to', target);
 
-                // Also add as a relationship for visualization
-                this.relationships.push({
-                    type: 'bind',
-                    source: source,
-                    target: target,
-                    name: element.name || 'bind'
-                });
+            this.relationships.push({
+                type: 'bind',
+                source: source,
+                target: target,
+                name: element.name || 'bind'
+            });
+
+            if (element.name === 'unnamed') {
+                element.name = `${source} = ${target}`;
             }
         }
 
@@ -2089,7 +2823,7 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
     }
 
     // Connect statement (inline): connect sourceRef to targetRef;
-    visitConnectStatement(ctx: any): void {
+    visitConnector(ctx: any): void {
         const element = this.createElement('connect', ctx);
 
         // Get qualified names: connect qn1 to qn2;
@@ -2117,24 +2851,64 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
                     target: target,
                     name: element.name || 'connect'
                 });
+
+                // Generate meaningful name for anonymous connectors
+                if (element.name === 'unnamed') {
+                    element.name = `${source} → ${target}`;
+                }
             }
         }
         this.visitChildren(ctx);
     }
 
     // Behavioral Constructs
-    visitPerformAction(ctx: any): void {
+    visitPerformActionUsage(ctx: any): void {
         const element = this.createElement('perform', ctx);
+        let actionName: string | undefined;
         try {
             const qualifiedName = ctx.qualifiedName ? ctx.qualifiedName() : null;
             if (qualifiedName) {
                 const qn = Array.isArray(qualifiedName) ? qualifiedName[0] : qualifiedName;
                 if (qn && typeof qn.getText === 'function') {
-                    element.attributes.set('action', qn.getText());
+                    const name = qn.getText();
+                    actionName = name;
+                    element.attributes.set('action', name);
                 }
             }
         } catch {
             // qualifiedName might not exist - that's ok
+        }
+
+        // Fallback: try ANTLR context tree for action name
+        if (!actionName) {
+            try {
+                const declCtx = ctx.performActionUsageDeclaration?.();
+                const refSubCtx = declCtx?.ownedReferenceSubsetting?.();
+                const qnText = this.extractQualifiedName(refSubCtx);
+                if (qnText) {
+                    actionName = qnText;
+                    element.attributes.set('action', qnText);
+                }
+            } catch {
+                // Ignore errors
+            }
+        }
+
+        // Fallback: try to get action name from full text if qualifiedName failed
+        if (!actionName) {
+            const fullText = ctx.getText?.() || '';
+            // Pattern: perform actionName — handles both unquoted and quoted names
+            const match = fullText.match(/^perform([a-zA-Z_'][a-zA-Z0-9_.:' -]*)/i);
+            if (match && match[1]) {
+                const extractedName = match[1];
+                actionName = extractedName;
+                element.attributes.set('action', extractedName);
+            }
+        }
+
+        // Generate meaningful name for anonymous perform usages
+        if (element.name === 'unnamed' && actionName) {
+            element.name = `perform: ${actionName}`;
         }
 
         // Check if this perform action has a body (inline action definition)
@@ -2161,14 +2935,17 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         }
     }
 
-    visitExhibitState(ctx: any): void {
+    visitExhibitStateUsage(ctx: any): void {
         const element = this.createElement('exhibit state', ctx);
+        let stateName: string | undefined;
         try {
             const qualifiedName = ctx.qualifiedName ? ctx.qualifiedName() : null;
             if (qualifiedName) {
                 const qn = Array.isArray(qualifiedName) ? qualifiedName[0] : qualifiedName;
                 if (qn && typeof qn.getText === 'function') {
-                    element.attributes.set('state', qn.getText());
+                    const name = qn.getText();
+                    stateName = name;
+                    element.attributes.set('state', name);
                 }
             }
             const parallelToken = ctx.PARALLEL ? ctx.PARALLEL() : null;
@@ -2178,104 +2955,79 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         } catch {
             // qualifiedName or PARALLEL might not exist - that's ok
         }
+
+        // Generate meaningful name for anonymous exhibit state usages
+        if (element.name === 'unnamed' && stateName) {
+            element.name = `exhibit: ${stateName}`;
+        }
+
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
     }
 
-    visitEntryAction(ctx: any): void {
-        // Check if this is actually an entry action or if ANTLR is misclassifying
-        const contextText = ctx.getText ? ctx.getText() : '';
-
-        // DEBUG: Log first 5 misclassified elements
-        if (this.elements.size < 5) {
-            // Debug logging disabled - no action needed for small element sets
-        }
-
-        let elementType = 'entry';
-
-        // Try to determine the correct element type based on context
-        // Check for state elements FIRST (most specific to least specific)
-        if (contextText.includes('state def ')) {
-            elementType = 'state def';
-        } else if (contextText.match(/\bstate\s+\w+\s*:/)) {
-            // Pattern: state <name> : <type>
-            elementType = 'state';
-        } else if (contextText.includes('transition ')) {
-            elementType = 'transition';
-        } else if (contextText.includes('package ')) {
-            elementType = 'package';
-        } else if (contextText.includes('part def ')) {
-            elementType = 'part def';
-        } else if (contextText.includes('part ')) {
-            elementType = 'part';
-        } else if (contextText.includes('action def ')) {
-            elementType = 'action def';
-        } else if (contextText.includes('action ')) {
-            elementType = 'action';
-        } else if (contextText.includes('requirement def ')) {
-            elementType = 'requirement def';
-        } else if (contextText.includes('requirement ')) {
-            elementType = 'requirement';
-        }
-
-        const element = this.createElement(elementType, ctx);
+    /**
+     * Extracts the action reference name from a stateActionUsage child.
+     * Grammar: (entry|do|exit) stateActionUsage
+     * stateActionUsage contains StatePerformActionUsageContext with action name text.
+     */
+    private extractStateActionName(ctx: any): string | undefined {
         try {
-            const qualifiedName = ctx.qualifiedName ? ctx.qualifiedName() : null;
-            if (qualifiedName) {
-                const qn = Array.isArray(qualifiedName) ? qualifiedName[0] : qualifiedName;
-                if (qn && typeof qn.getText === 'function') {
-                    element.attributes.set('action', qn.getText());
+            const stateAction = ctx.stateActionUsage?.();
+            if (stateAction) {
+                const rawText = stateAction.getText?.() || '';
+                // Strip trailing semicolons and braces, extract just the action name
+                const cleaned = rawText.replace(/[;{}].*$/, '').replace(/^action\s*/, '').trim();
+                if (cleaned && /^[a-zA-Z_]/.test(cleaned)) {
+                    return cleaned;
                 }
             }
         } catch {
-            // Ignore qualifiedName extraction errors - node may not exist in all contexts
-            // Silently handle missing qualifiedName nodes
+            // stateActionUsage may not exist
         }
+        // Fallback: extract from full text
+        const fullText = ctx.getText?.() || '';
+        // Match: entry/do/exit followed by optional 'action' then name
+        const match = fullText.match(/^(?:entry|do|exit)(?:action)?\s*([a-zA-Z_][a-zA-Z0-9_]*)/);
+        return match?.[1];
+    }
+
+    visitEntryActionMember(ctx: any): void {
+        const element = this.createElement('entry', ctx);
+
+        if (element.name === 'unnamed') {
+            const actionName = this.extractStateActionName(ctx);
+            if (actionName) {
+                element.attributes.set('action', actionName);
+                element.name = `entry: ${actionName}`;
+            }
+        }
+
         this.visitChildren(ctx);
     }
 
-    visitExitAction(ctx: any): void {
+    visitExitActionMember(ctx: any): void {
         const element = this.createElement('exit', ctx);
-        try {
-            const qualifiedName = ctx.qualifiedName ? ctx.qualifiedName() : null;
-            if (qualifiedName) {
-                const qn = Array.isArray(qualifiedName) ? qualifiedName[0] : qualifiedName;
-                if (qn && typeof qn.getText === 'function') {
-                    element.attributes.set('action', qn.getText());
-                }
+
+        if (element.name === 'unnamed') {
+            const actionName = this.extractStateActionName(ctx);
+            if (actionName) {
+                element.attributes.set('action', actionName);
+                element.name = `exit: ${actionName}`;
             }
-        } catch {
-            // Ignore qualifiedName extraction errors - node may not exist in all contexts
-            // Silently handle missing qualifiedName nodes
         }
+
         this.visitChildren(ctx);
     }
 
-    visitDoAction(ctx: any): void {
+    visitDoActionMember(ctx: any): void {
         const element = this.createElement('do', ctx);
 
-        // Safely handle qualifiedName - it could be a method or property
-        let qualifiedName = null;
-        if (ctx.qualifiedName) {
-            if (typeof ctx.qualifiedName === 'function') {
-                try {
-                    qualifiedName = ctx.qualifiedName();
-                } catch {
-                    // qualifiedName() can throw if node doesn't exist
-                }
-            } else {
-                qualifiedName = ctx.qualifiedName;
-            }
-        }
-
-        if (qualifiedName) {
-            const qn = Array.isArray(qualifiedName) ? qualifiedName[0] : qualifiedName;
-            // Safely check if getText exists and is a function
-            if (qn && typeof qn.getText === 'function') {
-                element.attributes.set('action', qn.getText());
-            } else if (qn && typeof qn === 'string') {
-                element.attributes.set('action', qn);
+        if (element.name === 'unnamed') {
+            const actionName = this.extractStateActionName(ctx);
+            if (actionName) {
+                element.attributes.set('action', actionName);
+                element.name = `do: ${actionName}`;
             }
         }
 
@@ -2284,7 +3036,7 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         this.parentStack.pop();
     }
 
-    visitAcceptEvent(ctx: any): void {
+    visitAcceptNode(ctx: any): void {
         const element = this.createElement('accept', ctx);
 
         // qualifiedName() is a method that returns an array or single context
@@ -2329,7 +3081,7 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
         this.visitChildren(ctx);
     }
 
-    visitSendAction(ctx: any): void {
+    visitSendNode(ctx: any): void {
         const element = this.createElement('send', ctx);
 
         // Safely get expression
@@ -2383,6 +3135,26 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
 
     visitVerificationCaseUsage(ctx: any): void {
         const element = this.createElement('verification', ctx);
+        this.parentStack.push(element);
+        this.visitChildren(ctx);
+        this.parentStack.pop();
+    }
+
+    visitRequirementVerificationMember(ctx: any): void {
+        // Handle: verify requirementRef { ... }
+        const fullText = ctx.getText?.() || '';
+
+        const element = this.createElement('verify', ctx);
+
+        // Generate meaningful name for verify statements (getText() strips whitespace)
+        if (element.name === 'unnamed') {
+            // Pattern: verifyreferenceName{ or verifyreferenceName;
+            const match = fullText.match(/^verify([a-zA-Z_][a-zA-Z0-9_.]*)/i);
+            if (match) {
+                element.name = `verify: ${match[1]}`;
+            }
+        }
+
         this.parentStack.push(element);
         this.visitChildren(ctx);
         this.parentStack.pop();
@@ -2445,7 +3217,7 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
     }
 
     // Relationship handling
-    visitSpecialization(ctx: SpecializationContext): void {
+    visitSpecialization(ctx: any): void {
         // Only process if we have a current element to add relationships to
         if (!this.currentElement) {
             this.visitChildren(ctx);
@@ -2501,7 +3273,7 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
             }
             const idArray = Array.isArray(identifiers) ? identifiers : (identifiers ? [identifiers] : []);
             if (idArray.length > 0) {
-                const target = idArray.map((identifier: IdentifierContext) => {
+                const target = idArray.map((identifier: any) => {
                     return identifier.text;
                 }).filter((name: string) => name).join('::');
 
@@ -2657,18 +3429,13 @@ class SysMLElementVisitor extends AbstractParseTreeVisitor<void> implements SysM
 
         return null;
     }
-
-    // Default visit behavior
-    protected defaultResult(): void {
-        return;
-    }
 }
 
 /**
  * Custom error listener for ANTLR parsing errors.
  * Batches errors to avoid flooding the console.
  */
-class SysMLErrorListener implements ANTLRErrorListener<any> {
+class SysMLErrorListener extends ErrorListener<any> {
     private errorCount = 0;
     private static readonly MAX_LOGGED_ERRORS = 5;
     private suppressedCount = 0;
@@ -2676,7 +3443,9 @@ class SysMLErrorListener implements ANTLRErrorListener<any> {
     constructor(
         private _document: vscode.TextDocument,
         private elements: Map<string, SysMLElement>
-    ) {}
+    ) {
+        super();
+    }
 
     /**
      * Log a summary of parse errors if any were suppressed.

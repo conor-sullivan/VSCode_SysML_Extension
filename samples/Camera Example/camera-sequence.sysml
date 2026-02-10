@@ -1,31 +1,23 @@
 package CameraTestSequence {
     import CameraTestBDD::*;
 
-    interaction def CaptureSequence {
-        participant photographer;
-        participant camera : CameraSystem;
-        participant storage;
+    part def CaptureSequence {
+        part photographer;
+        part camera : CameraSystem;
+        part storage;
 
-        message wakeRequest : SendMessage from photographer to camera {
-            payload command : String;
-        }
-
-        message wakeAck : SendMessage from camera to photographer {
-            payload status : String;
-        }
-
-        message focusCommand : SendMessage from photographer to camera;
-        message focusLocked : SendMessage from camera to photographer;
-        message shutterCommand : SendMessage from photographer to camera;
-        message frameBuffered : SendMessage from camera to storage;
-        message persistAck : SendMessage from storage to photographer;
+        flow wakeRequest from photographer to camera;
+        flow wakeAck from camera to photographer;
+        flow focusCommand from photographer to camera;
+        flow focusLocked from camera to photographer;
+        flow shutterCommand from photographer to camera;
+        flow frameBuffered from camera to storage;
+        flow persistAck from storage to photographer;
 
         occurrence wakeup;
         occurrence focusPhase;
         occurrence capturePhase;
     }
 
-    interaction captureHappyPath {
-        interaction scenario : CaptureSequence;
-    }
+    part captureHappyPath : CaptureSequence;
 }

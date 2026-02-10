@@ -11,131 +11,125 @@ package CameraTestActivity {
             out batteryLevel : Real;
         }
 
-        then decision checkBattery {
-            if (batteryLevel >= 20.0) {
-                then action enableRegulators {
-                    out regulatorsReady : Boolean;
-                }
-            } else {
-            then action reportLowBattery {
-                out powered = false;
-                out opticsReady = false;
+        then if (batteryLevel >= 20.0) {
+            action enableRegulators {
+                out regulatorsReady : Boolean;
             }
+        } else {
+            action reportLowBattery {
+                out powered : Boolean;
+                out opticsReady : Boolean;
+            }
+        }
+
+        then action initializeOptics {
+            in regulatorsReady : Boolean;
+            out focusCalibrated : Boolean;
+        }
+
+        then action confirmReady {
+            in focusCalibrated : Boolean;
+            out powered : Boolean;
+            out opticsReady : Boolean;
         }
     }
 
-    then action initializeOptics {
-        in regulatorsReady : Boolean;
-        out focusCalibrated : Boolean;
-    }
-
-    then action confirmReady {
-        in focusCalibrated : Boolean;
-        out powered = true;
-        out opticsReady = focusCalibrated;
-    }
-}
-
-action def AcquireFrame {
-    in opticsReady : Boolean;
-    in exposureTarget : Real;
-    out frameData : String;
-
-    action meterScene {
-        in lightTarget : Real;
-        out measuredLux : Real;
-    }
-
-    then action adjustSensor {
-        in measuredLux : Real;
-        in desiredExposure : Real;
-        out integrationTime : Real;
-    }
-
-    then action triggerShutter {
-        in integrationTime : Real;
-        out photonCharge : Real;
-    }
-
-    then action readSensor {
-        in photonCharge : Real;
+    action def AcquireFrame {
+        in opticsReady : Boolean;
+        in exposureTarget : Real;
         out frameData : String;
+
+        action meterScene {
+            in lightTarget : Real;
+            out measuredLux : Real;
+        }
+
+        then action adjustSensor {
+            in measuredLux : Real;
+            in desiredExposure : Real;
+            out integrationTime : Real;
+        }
+
+        then action triggerShutter {
+            in integrationTime : Real;
+            out photonCharge : Real;
+        }
+
+        then action readSensor {
+            in photonCharge : Real;
+            out frameData : String;
+        }
     }
-}
 
-action def PostProcessBurst {
-    in frameData : String;
-    in burstCount : Integer;
-    out curatedSet : Integer;
+    action def PostProcessBurst {
+        in frameData : String;
+        in burstCount : Integer;
+        out curatedSet : Integer;
 
-    action evaluateSharpness {
-        in rawFrame : String;
-        out score : Real;
-    }
+        action evaluateSharpness {
+            in rawFrame : String;
+            out score : Real;
+        }
 
-    then decision acceptFrame {
-        if (score >= 0.8) {
-            then action enqueueFrame {
+        then if (score >= 0.8) {
+            action enqueueFrame {
                 in framePayload : String;
                 in nextIndex : Integer;
                 out updatedCount : Integer;
             }
         } else {
-        then action discardFrame {
-            in reason : String;
+            action discardFrame {
+                in reason : String;
+            }
+        }
+
+        then action finalizeSet {
+            in updatedCount : Integer;
+            out curatedSet : Integer;
         }
     }
-}
 
-then action finalizeSet {
-    in updatedCount : Integer;
-    out curatedSet = updatedCount;
-}
-}
+    action captureWorkflow {
+        first start;
 
-action captureWorkflow {
-    first start;
+        then action declareContext {
+            out desiredExposure : Real;
+            out burstTarget : Integer;
+        }
 
-    then action declareContext {
-        out desiredExposure : Real = 0.12;
-        out burstTarget : Integer = 1;
-    }
+        then action prepare : PrepareCamera {
+            out powered : Boolean;
+            out opticsReady : Boolean;
+        }
 
-    then prepare : PrepareCamera {
-        out powered = cameraReady;
-        out opticsReady = opticsAligned;
-    }
-
-    then decision readyCheck {
-        if (cameraReady && opticsAligned) {
-            then acquire : AcquireFrame {
-                in opticsReady = opticsAligned;
-                in exposureTarget = desiredExposure;
-                out frameData = currentFrame;
+        then if (powered) {
+            action acquire : AcquireFrame {
+                in opticsReady : Boolean;
+                in exposureTarget : Real;
+                out frameData : String;
             }
 
             then action bufferFrame {
-                in payload = currentFrame;
-                out storedFrame = currentFrame;
+                in payload : String;
+                out storedFrame : String;
             }
         } else {
-        then action abortSequence {
-            out logMessage = "Camera not ready";
+            action abortSequence {
+                out logMessage : String;
+            }
         }
+
+        then action post : PostProcessBurst {
+            in frameData : String;
+            in burstCount : Integer;
+            out curatedSet : Integer;
+        }
+
+        then action updateStorage {
+            in acceptedFrames : Integer;
+            out storageUsage : Real;
+        }
+
+        then done;
     }
-}
-
-then post : PostProcessBurst {
-    in frameData = currentFrame;
-    in burstCount = burstTarget;
-    out curatedSet = acceptedFrames;
-}
-
-then action updateStorage {
-    in acceptedFrames : Integer;
-    out storageUsage : Real;
-}
-
-then done;
-}
 }
