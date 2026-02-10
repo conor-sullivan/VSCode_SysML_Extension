@@ -236,6 +236,7 @@ import { DefinitionContext } from "./SysMLv2";
 import { DefinitionDeclarationContext } from "./SysMLv2";
 import { DefinitionBodyContext } from "./SysMLv2";
 import { DefinitionBodyItemContext } from "./SysMLv2";
+import { DefinitionBodyItemContentContext } from "./SysMLv2";
 import { DefinitionMemberContext } from "./SysMLv2";
 import { VariantUsageMemberContext } from "./SysMLv2";
 import { NonOccurrenceUsageMemberContext } from "./SysMLv2";
@@ -506,6 +507,7 @@ import { PortConjugationContext } from "./SysMLv2";
  */
 export class SysMLv2Visitor<Result> extends ParseTreeVisitor<Result> {
     [key: string]: any;
+	
 	
 	
 	

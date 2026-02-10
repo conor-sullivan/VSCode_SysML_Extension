@@ -14,9 +14,18 @@ export class ANTLRSysMLParser {
     private elements: Map<string, SysMLElement> = new Map();
     private relationships: Relationship[] = [];
     private libraryIndexer: LibraryIndexer;
+    // Reuse lexer/parser instances to preserve the DFA prediction cache across parses
+    private cachedLexer: SysMLv2Lexer;
+    private cachedParser: SysMLv2;
 
     constructor() {
         this.libraryIndexer = LibraryIndexer.getInstance();
+        // Pre-construct lexer/parser so the ATN is deserialized once and the DFA cache persists
+        this.cachedLexer = new SysMLv2Lexer(new CharStream(''));
+        const tokenStream = new CommonTokenStream(this.cachedLexer);
+        this.cachedParser = new SysMLv2(tokenStream);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (this.cachedParser as any)._interp.predictionMode = PredictionMode.SLL;
     }
 
     /**
@@ -62,14 +71,16 @@ export class ANTLRSysMLParser {
 
             const content = document.getText();
             const inputStream = new CharStream(content);
+
+            // Reuse cached lexer/parser to preserve DFA prediction cache
             const lexer = new SysMLv2Lexer(inputStream);
             const tokenStream = new CommonTokenStream(lexer);
-            const parser = new SysMLv2(tokenStream);
-
-            // Use SLL prediction mode for performance (avoids exponential backtracking)
-            // SLL is faster but may produce more parse errors than LL mode
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (parser as any)._interp.predictionMode = PredictionMode.SLL;
+            const parser = this.cachedParser;
+            (parser as any).setTokenStream(tokenStream);
+            parser.reset();
+
+            // SLL prediction mode is set once in constructor
 
             // Add custom error handling
             const errorListener = new SysMLErrorListener(document, this.elements);
