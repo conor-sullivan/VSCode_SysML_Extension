@@ -6,10 +6,10 @@
  * the ~4 s UI block that occurs on large files.
  */
 
-import { Worker } from 'worker_threads';
-import * as vscode from 'vscode';
 import * as path from 'path';
-import type { SysMLElement, Relationship } from './sysmlParser';
+import * as vscode from 'vscode';
+import { Worker } from 'worker_threads';
+import type { Relationship, SysMLElement } from './sysmlParser';
 
 interface PendingRequest {
     resolve: (result: ParseWorkerResult) => void;
