@@ -43,9 +43,9 @@ function parseSysMLDocument(document: vscode.TextDocument): void {
     // Open the parser gate so language providers wait for us
     parser.beginParseGate();
 
-    // Micro-delay (≈0 ms) so that if the user is rapidly clicking we only
-    // keep the very last request, but the notification appears on the next
-    // event-loop turn — far faster than the old 50 ms setTimeout.
+    // Debounce (300 ms) — wait for the user to pause typing before
+    // kicking off the expensive ANTLR parse.  This prevents parse-per-
+    // keystroke and keeps the extension host responsive.
     parseDebounceTimer = setTimeout(async () => {
         if (cancelSource.token.isCancellationRequested || document.isClosed) {
             parser.endParseGate();
@@ -91,7 +91,7 @@ function parseSysMLDocument(document: vscode.TextDocument): void {
             }
             cancelSource.dispose();
         }
-    }, 0);
+    }, 300);
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -703,6 +703,7 @@ export function deactivate() {
     outputChannel?.appendLine('SysML v2.0 extension is now deactivated');
 
     // Clean up resources
+    parser?.dispose();
     if (VisualizationPanel.currentPanel) {
         VisualizationPanel.currentPanel.dispose();
     }
