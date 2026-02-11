@@ -6,9 +6,9 @@ OUT_DIR = out
 SRC_DIR = src
 DIST_DIR = dist
 LIBRARY_DIR = sysml.library
-GRAMMAR_CONFIG = scripts/grammar/config.json
-LIBRARY_VERSION = $(shell node -p "require('./$(GRAMMAR_CONFIG)').release_tag")
-LIBRARY_REPO = $(shell node -p "require('./$(GRAMMAR_CONFIG)').release_repo")
+GRAMMAR_REPO = daltskin/sysml-v2-grammar
+LIBRARY_VERSION ?= $(shell gh release view --repo $(GRAMMAR_REPO) --json tagName --jq '.tagName' 2>/dev/null | sed 's/^v//')
+LIBRARY_REPO = Systems-Modeling/SysML-v2-Release
 LIBRARY_URL = https://github.com/$(LIBRARY_REPO)/archive/refs/tags/$(LIBRARY_VERSION).tar.gz
 PACKAGE_NAME = $(shell node -p "require('./package.json').name")
 VERSION = $(shell node -p "require('./package.json').version")
@@ -47,7 +47,6 @@ help:
 	@echo "  $(GREEN)dev$(NC)            - Start development environment"
 	@echo "  $(GREEN)debug$(NC)          - Prepare for debugging (then press F5 in VS Code)"
 	@echo "  $(GREEN)debug-watch$(NC)    - Launch watch mode for debugging with auto-recompile"
-	@echo "  $(GREEN)debug-elk$(NC)      - Automated ELK rendering debugger with diagnostics"
 	@echo "  $(GREEN)grammar$(NC)        - Generate ANTLR4 grammar from SysML v2 spec BNF"
 	@echo "  $(GREEN)grammar-clean$(NC)  - Remove generated grammar files"
 	@echo "  $(GREEN)prepublish$(NC)     - Prepare for publishing"
@@ -226,23 +225,6 @@ debug-watch: install
 	@echo "$(YELLOW)Press Ctrl+C to stop watch mode$(NC)"
 	@wait
 
-# Automated ELK rendering debugger
-.PHONY: debug-elk
-debug-elk:
-	@echo "$(YELLOW)Running automated ELK rendering debugger...$(NC)"
-	@echo "$(BLUE)This will:$(NC)"
-	@echo "$(BLUE)1. Compile the extension$(NC)"
-	@echo "$(BLUE)2. Launch Extension Development Host$(NC)"
-	@echo "$(BLUE)3. Monitor logs for ELK-related issues$(NC)"
-	@echo "$(BLUE)4. Generate diagnostic report$(NC)"
-	@echo ""
-	@npm run debug:elk
-	@echo ""
-	@echo "$(GREEN)✓ Debug session complete$(NC)"
-	@echo "$(BLUE)Check test-output/elk-debug-report.txt for details$(NC)"
-
-
-
 
 
 # Clean build artifacts
@@ -273,16 +255,14 @@ info:
 	@echo "  Compiled: $(shell [ -d $(OUT_DIR) ] && echo '✓ Yes' || echo '✗ No')"
 	@echo "  Package exists: $(shell [ -f "$(PACKAGE_NAME)-$(VERSION).vsix" ] && echo '✓ Yes' || echo '✗ No')"
 
-# Generate ANTLR4 grammar from official SysML v2 spec BNF
+# Download pre-built grammar from sysml-v2-grammar releases
 .PHONY: grammar
 grammar:
-	@echo "$(YELLOW)Generating ANTLR4 grammar from SysML v2 spec BNF...$(NC)"
-	@if ! command -v python3 >/dev/null 2>&1; then \
-		echo "$(RED)Python 3 is required but not installed.$(NC)"; exit 1; fi
-	@pip3 install -q -r scripts/grammar/requirements.txt 2>/dev/null || \
-		pip install -q -r scripts/grammar/requirements.txt
-	python3 scripts/grammar/generate_grammar.py --cache
-	@echo "$(GREEN)Grammar generated successfully!$(NC)"
+	@echo "$(YELLOW)Downloading grammar from $(GRAMMAR_REPO) release...$(NC)"
+	@if ! command -v gh >/dev/null 2>&1; then \
+		echo "$(RED)GitHub CLI (gh) is required but not installed.$(NC)"; exit 1; fi
+	gh release download --repo $(GRAMMAR_REPO) --pattern '*.g4' --pattern '*.tokens' --dir grammar --clobber
+	@echo "$(GREEN)Grammar downloaded successfully!$(NC)"
 	@echo "$(YELLOW)Run 'npm run antlr:generate' to compile TypeScript sources.$(NC)"
 
 # Generate grammar and compile ANTLR4 to TypeScript in one step
@@ -295,9 +275,10 @@ grammar-full: grammar
 # Clean generated grammar files
 .PHONY: grammar-clean
 grammar-clean:
-	@echo "$(YELLOW)Cleaning generated grammar cache...$(NC)"
+	@echo "$(YELLOW)Cleaning generated grammar files...$(NC)"
 	rm -rf .grammar-cache
-	@echo "$(GREEN)Grammar cache cleaned.$(NC)"
+	rm -f grammar/*.g4 grammar/*.tokens
+	@echo "$(GREEN)Grammar files cleaned.$(NC)"
 
 # Verify all is working
 .PHONY: verify

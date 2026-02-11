@@ -1,8 +1,8 @@
 import { CharStream, CommonTokenStream, ErrorListener, PredictionMode } from 'antlr4';
 import * as vscode from 'vscode';
-import { SysMLv2 } from './generated/grammar/SysMLv2';
 import { SysMLv2Lexer } from './generated/grammar/SysMLv2Lexer';
-import { SysMLv2Visitor } from './generated/grammar/SysMLv2Visitor';
+import { SysMLv2Parser } from './generated/grammar/SysMLv2Parser';
+import { SysMLv2ParserVisitor } from './generated/grammar/SysMLv2ParserVisitor';
 import { LibraryIndexer } from './libraryIndexer';
 import { ActivityAction, ActivityDiagram, ActivityState, ControlFlow, DecisionNode, Message, Participant, Relationship, SequenceDiagram, SysMLElement } from './sysmlParser';
 
@@ -16,14 +16,14 @@ export class ANTLRSysMLParser {
     private libraryIndexer: LibraryIndexer;
     // Reuse lexer/parser instances to preserve the DFA prediction cache across parses
     private cachedLexer: SysMLv2Lexer;
-    private cachedParser: SysMLv2;
+    private cachedParser: SysMLv2Parser;
 
     constructor() {
         this.libraryIndexer = LibraryIndexer.getInstance();
         // Pre-construct lexer/parser so the ATN is deserialized once and the DFA cache persists
         this.cachedLexer = new SysMLv2Lexer(new CharStream(''));
         const tokenStream = new CommonTokenStream(this.cachedLexer);
-        this.cachedParser = new SysMLv2(tokenStream);
+        this.cachedParser = new SysMLv2Parser(tokenStream);
         (this.cachedParser as any)._interp.predictionMode = PredictionMode.SLL;
     }
 
@@ -688,7 +688,7 @@ export class ANTLRSysMLParser {
 /**
  * ANTLR visitor implementation for extracting SysML elements.
  */
-class SysMLElementVisitor extends SysMLv2Visitor<void> {
+class SysMLElementVisitor extends SysMLv2ParserVisitor<void> {
     private currentNamespace: string[] = [];
     private parentStack: SysMLElement[] = [];
     private currentElement: SysMLElement | null = null;

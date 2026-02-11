@@ -41,7 +41,7 @@ for (const file of tsFiles) {
     });
 
     // 3. Convert default imports of local files to named imports
-    // e.g., `import SysMLv2Visitor from "./SysMLv2Visitor"` → `import { SysMLv2Visitor } from "./SysMLv2Visitor"`
+    // e.g., `import SysMLv2ParserVisitor from "./SysMLv2ParserVisitor"` → `import { SysMLv2ParserVisitor } from "./SysMLv2ParserVisitor"`
     const defaultImportPattern = /^import\s+(\w+)\s+from\s+["'](\.\/[^"']+)["']\s*;/gm;
     content = content.replace(defaultImportPattern, (match, name, importPath) => {
         changes++;

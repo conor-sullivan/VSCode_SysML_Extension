@@ -3,7 +3,7 @@
 const fs = require('fs');
 const antlr4 = require('antlr4');
 const { SysMLv2Lexer } = require('../out/parser/generated/grammar/SysMLv2Lexer');
-const { SysMLv2 } = require('../out/parser/generated/grammar/SysMLv2');
+const { SysMLv2Parser } = require('../out/parser/generated/grammar/SysMLv2Parser');
 
 const file = 'samples/temp/SysML v2 Spec Annex A SimpleVehicleModel.sysml';
 const content = fs.readFileSync(file, 'utf8');
@@ -23,7 +23,7 @@ if (lexErrs.length > 0) {
     console.log('');
 }
 
-const parser = new SysMLv2(tokens);
+const parser = new SysMLv2Parser(tokens);
 parser.removeErrorListeners();
 let parseErrors = [];
 parser.addErrorListener({

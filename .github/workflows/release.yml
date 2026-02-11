@@ -48,9 +48,6 @@ jobs:
       - name: Set package.json version
         run: npm pkg set version=${{ steps.version.outputs.version }}
 
-      - name: Compile
-        run: npm run compile
-
       - name: Package VSIX
         run: npm run package
 
