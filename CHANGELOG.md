@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0]
+
+### Changed
+
+- Extracted grammar generation pipeline into standalone [sysml-v2-grammar](https://github.com/daltskin/sysml-v2-grammar) repository
+- Grammar files now downloaded from release artifacts via `make grammar` / `npm run grammar:download`
+- Parser grammar renamed from `SysMLv2.g4` to `SysMLv2Parser.g4` (aligned with upstream repo)
+- Removed redundant `antlr:copy-tokens` build step — tokens file now included in grammar release
+- Removed `make debug-elk` target — use `npm run debug:elk` directly if needed
+
+### Removed
+
+- 19 orphaned renderer files and associated view model types
+- 6 dead test files for removed renderers
+- Python-based grammar generation scripts (`scripts/grammar/`)
+
 ## [0.15.0]
 
 ### Added
