@@ -1,0 +1,3 @@
+[submodule "sysml-v2-grammar"]
+	path = sysml-v2-grammar
+	url = git@github.com:daltskin/sysml-v2-grammar.git

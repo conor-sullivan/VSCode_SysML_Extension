@@ -6,7 +6,7 @@ OUT_DIR = out
 SRC_DIR = src
 DIST_DIR = dist
 LIBRARY_DIR = sysml.library
-GRAMMAR_CONFIG = scripts/grammar/config.json
+GRAMMAR_CONFIG = sysml-v2-grammar/scripts/config.json
 LIBRARY_VERSION = $(shell node -p "require('./$(GRAMMAR_CONFIG)').release_tag")
 LIBRARY_REPO = $(shell node -p "require('./$(GRAMMAR_CONFIG)').release_repo")
 LIBRARY_URL = https://github.com/$(LIBRARY_REPO)/archive/refs/tags/$(LIBRARY_VERSION).tar.gz
@@ -279,9 +279,9 @@ grammar:
 	@echo "$(YELLOW)Generating ANTLR4 grammar from SysML v2 spec BNF...$(NC)"
 	@if ! command -v python3 >/dev/null 2>&1; then \
 		echo "$(RED)Python 3 is required but not installed.$(NC)"; exit 1; fi
-	@pip3 install -q -r scripts/grammar/requirements.txt 2>/dev/null || \
-		pip install -q -r scripts/grammar/requirements.txt
-	python3 scripts/grammar/generate_grammar.py --cache
+	@pip3 install -q -r sysml-v2-grammar/scripts/requirements.txt 2>/dev/null || \
+		pip install -q -r sysml-v2-grammar/scripts/requirements.txt
+	python3 sysml-v2-grammar/scripts/generate_grammar.py --output-dir grammar --cache
 	@echo "$(GREEN)Grammar generated successfully!$(NC)"
 	@echo "$(YELLOW)Run 'npm run antlr:generate' to compile TypeScript sources.$(NC)"
 
