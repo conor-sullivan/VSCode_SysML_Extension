@@ -1,7 +1,7 @@
 import { CharStream, CommonTokenStream, ErrorListener, PredictionMode } from 'antlr4';
 import * as vscode from 'vscode';
-import { SysMLv2Parser } from './generated/grammar/SysMLv2Parser';
 import { SysMLv2Lexer } from './generated/grammar/SysMLv2Lexer';
+import { SysMLv2Parser } from './generated/grammar/SysMLv2Parser';
 import { SysMLv2ParserVisitor } from './generated/grammar/SysMLv2ParserVisitor';
 import { LibraryIndexer } from './libraryIndexer';
 import { ActivityAction, ActivityDiagram, ActivityState, ControlFlow, DecisionNode, Message, Participant, Relationship, SequenceDiagram, SysMLElement } from './sysmlParser';

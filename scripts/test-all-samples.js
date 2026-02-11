@@ -26,16 +26,16 @@ for (const file of files) {
     const content = fs.readFileSync(file, 'utf8');
     const chars = new antlr4.CharStream(content);
     const lexer = new SysMLv2Lexer(chars);
-    
+
     let lexerErrors = 0;
     lexer.removeErrorListeners();
     lexer.addErrorListener({
         syntaxError: () => { lexerErrors++; }
     });
-    
+
     const tokens = new antlr4.CommonTokenStream(lexer);
     tokens.fill();
-    
+
     const parser = new SysMLv2Parser(tokens);
     let parseErrors = [];
     parser.removeErrorListeners();
@@ -47,22 +47,22 @@ for (const file of files) {
         reportAmbiguity: () => {},
         reportContextSensitivity: () => {}
     });
-    
+
     // Use SLL prediction mode
     parser._interp.predictionMode = antlr4.PredictionMode.SLL;
-    
+
     const start = Date.now();
     const tree = parser.rootNamespace();
     const elapsed = Date.now() - start;
-    
+
     const children = tree.children ? tree.children.length : 0;
     const status = parseErrors.length === 0 ? '✓' : '✗';
-    
+
     if (parseErrors.length === 0) totalPass++;
     else totalFail++;
-    
+
     console.log(`${status} ${relPath} (${elapsed}ms, ${tokens.tokens.length} tokens, ${children} children, ${parseErrors.length} errors)`);
-    
+
     if (parseErrors.length > 0) {
         parseErrors.slice(0, 3).forEach(e => {
             console.log(`    L${e.line}:${e.col}: ${e.msg}`);
