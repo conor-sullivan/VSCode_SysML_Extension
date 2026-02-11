@@ -19,6 +19,20 @@ let libraryService: LibraryService;
 let parseDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 let activeParseCancel: vscode.CancellationTokenSource | undefined;
 
+/** Available visualization views — matches the webview's dropdown options */
+const visualizationViews = [
+    { id: 'elk',       label: '◆ General',          description: 'ELK auto-layout diagram' },
+    { id: 'ibd',       label: '▦ Interconnection',  description: 'Internal block diagram' },
+    { id: 'activity',  label: '▶ Activity',         description: 'Activity diagram' },
+    { id: 'state',     label: '⌘ State',            description: 'State machine diagram' },
+    { id: 'sequence',  label: '⇄ Sequence',         description: 'Sequence diagram' },
+    { id: 'usecase',   label: '◎ Case',             description: 'Use case diagram' },
+    { id: 'tree',      label: '▲ Tree',             description: 'Tree layout' },
+    { id: 'package',   label: '▤ Package',          description: 'Package diagram' },
+    { id: 'graph',     label: '● Graph',            description: 'Force-directed graph' },
+    { id: 'hierarchy', label: '■ Hierarchy',        description: 'Hierarchical block diagram' },
+];
+
 /**
  * Centralized parse entry point.  Shows a progress notification
  * **immediately** (before any ANTLR work), gates language providers so they
@@ -373,14 +387,10 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('sysml.visualizeFolderWithView', async (uri: vscode.Uri, selectedUris?: vscode.Uri[]) => {
-            // Import at runtime to avoid circular dependencies
-            const { getRendererDefinitions } = await import('./visualization/renderers');
-
-            const views = getRendererDefinitions();
-            const items = views.map(view => ({
-                label: view.label,
-                description: view.description,
-                viewId: view.id
+            const items = visualizationViews.map(v => ({
+                label: v.label,
+                description: v.description,
+                viewId: v.id
             }));
 
             const selected = await vscode.window.showQuickPick(items, {
@@ -409,12 +419,10 @@ export function activate(context: vscode.ExtensionContext) {
 
             // If no view ID provided, show picker
             if (!selectedViewId) {
-                const { getRendererDefinitions } = await import('./visualization/renderers');
-                const views = getRendererDefinitions();
-                const items = views.map(view => ({
-                    label: view.label,
-                    description: view.description,
-                    viewId: view.id
+                const items = visualizationViews.map(v => ({
+                    label: v.label,
+                    description: v.description,
+                    viewId: v.id
                 }));
 
                 const selected = await vscode.window.showQuickPick(items, {
