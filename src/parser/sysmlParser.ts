@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { LibraryService } from '../library/service';
 import { EnrichedElement, ResolutionResult, SemanticResolver } from '../resolver';
 import type { ANTLRSysMLParser } from './antlrSysMLParser';
+import { ParserWorkerHost } from './parserWorkerHost';
 
 // Debug flag - set to true for verbose logging
 const DEBUG_ACTIVITY_PARSING = false;
@@ -315,6 +316,7 @@ export class SysMLParser {
     private relationships: Relationship[] = [];
     private antlrParser: ANTLRSysMLParser | false | null = null; // Lazy loaded to avoid circular imports
     private semanticResolver: SemanticResolver | null = null; // Semantic resolver for type checking
+    private workerHost: ParserWorkerHost | null = null; // Worker thread for async parsing
 
     // Parse cache to avoid reparsing unchanged documents
     private parseCache: Map<string, { hash: number; elements: SysMLElement[]; relationships: Relationship[] }> = new Map();
@@ -595,8 +597,8 @@ export class SysMLParser {
                 return cached.result;
             }
 
-            // First parse with ANTLR (this also uses caching)
-            const elements = this.parse(document);
+            // First parse with ANTLR via Worker thread (this also uses caching)
+            const elements = await this.parseAsync(document);
 
             // Then resolve types and validate against library
             const resolver = this.getSemanticResolver();
@@ -643,6 +645,77 @@ export class SysMLParser {
                 }
             };
         }
+    }
+
+    /**
+     * Parse document asynchronously using a Worker thread.
+     * Falls back to synchronous parsing if the worker is unavailable.
+     */
+    async parseAsync(document: vscode.TextDocument): Promise<SysMLElement[]> {
+        const uri = document.uri.toString();
+        const content = document.getText();
+        const contentHash = this.hashContent(content);
+
+        // Check cache first — avoid expensive ANTLR parsing if content unchanged
+        const cached = this.parseCache.get(uri);
+        if (cached && cached.hash === contentHash) {
+            this.elements.clear();
+            this.updateElementCache(cached.elements);
+            this.relationships = cached.relationships;
+            return cached.elements;
+        }
+
+        try {
+            if (!this.workerHost) {
+                this.workerHost = new ParserWorkerHost();
+            }
+
+            const result = await this.workerHost.parseDocument(content, uri, false);
+
+            // Update internal state
+            this.elements.clear();
+            this.updateElementCache(result.elements);
+            this.relationships = result.relationships;
+
+            // Cache the result
+            this.parseCache.set(uri, {
+                hash: contentHash,
+                elements: result.elements,
+                relationships: [...this.relationships]
+            });
+
+            // Log parse errors for diagnostics if any
+            const errorElements = result.elements.filter(el => el.type === 'error');
+            if (errorElements.length > 0) {
+                const message = `ANTLR parsing (worker) produced ${errorElements.length} error elements`;
+                try {
+                    const { getOutputChannel } = require('../extension');
+                    getOutputChannel()?.appendLine(message);
+                } catch {
+                    // Silently fail
+                }
+            }
+
+            return result.elements;
+        } catch (error) {
+            // Fall back to synchronous parsing on the main thread
+            const message = `Worker parse failed, falling back to sync: ${error instanceof Error ? error.message : 'Unknown error'}`;
+            try {
+                const { getOutputChannel } = require('../extension');
+                getOutputChannel()?.appendLine(message);
+            } catch {
+                // Silently fail
+            }
+            return this.parse(document);
+        }
+    }
+
+    /**
+     * Terminate the parser Worker thread and release resources.
+     */
+    dispose(): void {
+        this.workerHost?.dispose();
+        this.workerHost = null;
     }
 
     /**

@@ -561,10 +561,7 @@ export class VisualizationPanel {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
-    <title>SysML Model Visualizer v${Date.now()}</title>
+    <title>SysML Model Visualizer</title>
     <script src="${d3Uri}"></script>
     <script src="${elkUri}"></script>
     <script src="${cytoscapeUri}"></script>
@@ -2865,13 +2862,6 @@ export class VisualizationPanel {
             }
 
             return actorGroup;
-        }
-
-        if (window.cytoscape && window.cytoscapeElk) {
-            window.cytoscape.use(window.cytoscapeElk);
-        }
-        if (window.cytoscape && window.cytoscapeSvg) {
-            window.cytoscape.use(window.cytoscapeSvg);
         }
 
         // Track manual zoom interactions to preserve user's zoom state
