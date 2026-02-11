@@ -1,7 +1,7 @@
 /*
  * SysML v2.0 ANTLR4 Lexer Grammar
  * AUTO-GENERATED from official SysML v2 specification BNF
- * Do not edit manually — run: python scripts/grammar/generate_grammar.py
+ * Do not edit manually — regenerate via: npm run grammar:from-spec
  */
 
 lexer grammar SysMLv2Lexer;
