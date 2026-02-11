@@ -10,7 +10,7 @@ const { ParseTreeWalker } = require('antlr4ts/tree');
 
 // Load the generated ANTLR classes
 const { SysMLv2Lexer } = require('../out/parser/generated/grammar/SysMLv2Lexer');
-const { SysMLv2 } = require('../out/parser/generated/grammar/SysMLv2');
+const { SysMLv2Parser } = require('../out/parser/generated/grammar/SysMLv2Parser');
 
 // Read the test file
 const sampleFile = path.join(__dirname, '../samples/SysML v2 Spec Annex A SimpleVehicleModel.sysml');
@@ -48,7 +48,7 @@ lexer.addErrorListener(lexerErrorListener);
 
 // Create parser
 const tokenStream = new CommonTokenStream(lexer);
-const parser = new SysMLv2(tokenStream);
+const parser = new SysMLv2Parser(tokenStream);
 
 // Add error listener to parser
 const parserErrorListener = new DebugErrorListener();

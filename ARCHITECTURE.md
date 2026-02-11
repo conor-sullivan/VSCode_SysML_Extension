@@ -44,7 +44,7 @@ A VS Code extension providing SysML v2.0 language support: syntax highlighting, 
 
 ### 1. Parser (`src/parser/`)
 
-- **ANTLR4-based** parser generated from `grammar/SysMLv2.g4`
+- **ANTLR4-based** parser generated from `grammar/SysMLv2Parser.g4`
 - Parses `.sysml` and `.kerml` files into AST (Abstract Syntax Tree), leveraging the ANTLR-generated lexer/parser pipeline to normalize tokens, build concrete syntax trees, and emit analyzer-ready element nodes
 - Caches parse results by content hash for performance
 - Extracts structural, behavioral, and requirement elements

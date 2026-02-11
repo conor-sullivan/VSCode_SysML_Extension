@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const antlr4 = require('antlr4');
 const { SysMLv2Lexer } = require('../out/parser/generated/grammar/SysMLv2Lexer');
-const { SysMLv2 } = require('../out/parser/generated/grammar/SysMLv2');
+const { SysMLv2Parser } = require('../out/parser/generated/grammar/SysMLv2Parser');
 
 function findSysmlFiles(dir) {
     let results = [];
@@ -36,7 +36,7 @@ for (const file of files) {
     const tokens = new antlr4.CommonTokenStream(lexer);
     tokens.fill();
     
-    const parser = new SysMLv2(tokens);
+    const parser = new SysMLv2Parser(tokens);
     let parseErrors = [];
     parser.removeErrorListeners();
     parser.addErrorListener({
