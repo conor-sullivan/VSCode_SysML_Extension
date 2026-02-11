@@ -47,7 +47,6 @@ help:
 	@echo "  $(GREEN)dev$(NC)            - Start development environment"
 	@echo "  $(GREEN)debug$(NC)          - Prepare for debugging (then press F5 in VS Code)"
 	@echo "  $(GREEN)debug-watch$(NC)    - Launch watch mode for debugging with auto-recompile"
-	@echo "  $(GREEN)debug-elk$(NC)      - Automated ELK rendering debugger with diagnostics"
 	@echo "  $(GREEN)grammar$(NC)        - Generate ANTLR4 grammar from SysML v2 spec BNF"
 	@echo "  $(GREEN)grammar-clean$(NC)  - Remove generated grammar files"
 	@echo "  $(GREEN)prepublish$(NC)     - Prepare for publishing"
@@ -226,23 +225,6 @@ debug-watch: install
 	@echo "$(YELLOW)Press Ctrl+C to stop watch mode$(NC)"
 	@wait
 
-# Automated ELK rendering debugger
-.PHONY: debug-elk
-debug-elk:
-	@echo "$(YELLOW)Running automated ELK rendering debugger...$(NC)"
-	@echo "$(BLUE)This will:$(NC)"
-	@echo "$(BLUE)1. Compile the extension$(NC)"
-	@echo "$(BLUE)2. Launch Extension Development Host$(NC)"
-	@echo "$(BLUE)3. Monitor logs for ELK-related issues$(NC)"
-	@echo "$(BLUE)4. Generate diagnostic report$(NC)"
-	@echo ""
-	@npm run debug:elk
-	@echo ""
-	@echo "$(GREEN)✓ Debug session complete$(NC)"
-	@echo "$(BLUE)Check test-output/elk-debug-report.txt for details$(NC)"
-
-
-
 
 
 # Clean build artifacts
@@ -293,9 +275,10 @@ grammar-full: grammar
 # Clean generated grammar files
 .PHONY: grammar-clean
 grammar-clean:
-	@echo "$(YELLOW)Cleaning generated grammar cache...$(NC)"
+	@echo "$(YELLOW)Cleaning generated grammar files...$(NC)"
 	rm -rf .grammar-cache
-	@echo "$(GREEN)Grammar cache cleaned.$(NC)"
+	rm -f grammar/*.g4 grammar/*.tokens
+	@echo "$(GREEN)Grammar files cleaned.$(NC)"
 
 # Verify all is working
 .PHONY: verify

@@ -71,16 +71,23 @@ package MySystem {
 
 ### Commands (Ctrl+Shift+P)
 
-| Command                        | Description              |
-| ------------------------------ | ------------------------ |
-| `SysML: Show Model Visualizer` | Open interactive diagram |
-| `SysML: Validate SysML Model`  | Run validation           |
-| `SysML: Format SysML Document` | Format current file      |
-| `SysML: Export Diagram`        | Export as PNG/SVG        |
+| Command                                 | Description                                                 |
+| --------------------------------------- | ----------------------------------------------------------- |
+| `SysML: Show Model Visualizer`          | Open interactive diagram for the current file               |
+| `SysML: Show Model Explorer`            | Open the tree view showing packages and elements            |
+| `SysML: Validate SysML Model`           | Run validation on the current file                          |
+| `SysML: Format SysML Document`          | Format the current SysML file                               |
+| `SysML: Export Visualization (PNG/SVG)` | Export the current diagram as PNG or SVG                    |
+| `SysML: Change Visualizer View`         | Switch between diagram views (General, IBD, Activity, etc.) |
+| `SysML: Refresh Visualization`          | Re-render the current diagram                               |
+| `SysML: Jump to Definition`             | Navigate to the definition of the symbol under cursor       |
+| `SysML: Clear Parse Cache`              | Clear the cached parse results                              |
+| `SysML: Refresh Model Tree`             | Refresh the Model Explorer tree view                        |
+| `SysML: Debug Parser`                   | Show parser output for the current file                     |
 
-### Folder Visualization
+### Context Menu
 
-Right-click any folder → "SysML: Visualize Folder" to aggregate and visualize all SysML files.
+Right-click any folder in the Explorer → **Visualise with SysML** to aggregate and visualize all `.sysml` files in that folder. Choose **Visualise with SysML (Choose View)** to pick a specific diagram type.
 
 ## Settings
 

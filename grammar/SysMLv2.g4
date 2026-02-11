@@ -1,7 +1,7 @@
 /*
  * SysML v2.0 ANTLR4 Parser Grammar
  * AUTO-GENERATED from official SysML v2 specification BNF
- * Do not edit manually — update via: npm run grammar:download
+ * Do not edit manually — run: python scripts/grammar/generate_grammar.py
  */
 
 parser grammar SysMLv2;

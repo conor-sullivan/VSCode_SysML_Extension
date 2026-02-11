@@ -264,9 +264,8 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run antlr:generate && npm run compile && npm run build:webview-assets",
-    "antlr:generate": "npm run antlr:lexer && npm run antlr:copy-tokens && npm run antlr:parser && npm run antlr:postprocess",
+    "antlr:generate": "npm run antlr:lexer && npm run antlr:parser && npm run antlr:postprocess",
     "antlr:lexer": "cd grammar && java -Xss16m -jar ../tools/antlr-4.13.2-complete.jar -Dlanguage=TypeScript -visitor -no-listener -o ../src/parser/generated/grammar SysMLv2Lexer.g4",
-    "antlr:copy-tokens": "cp src/parser/generated/grammar/SysMLv2Lexer.tokens grammar/",
     "antlr:parser": "cd grammar && java -Xss16m -jar ../tools/antlr-4.13.2-complete.jar -Dlanguage=TypeScript -visitor -no-listener -o ../src/parser/generated/grammar SysMLv2.g4",
     "antlr:postprocess": "node scripts/postprocess-antlr.js",
     "antlr:clean": "rimraf src/parser/generated",
