@@ -61,6 +61,21 @@ export function startLanguageClient(
         },
         outputChannel,
         traceOutputChannel: outputChannel,
+
+        // Disable inlay hints by default — they interfere with renaming
+        // and editing identifiers in SysML files.  Users can opt-in via
+        // the "sysml.inlayHints.enabled" setting.
+        middleware: {
+            provideInlayHints: (document, range, token, next) => {
+                const enabled = vscode.workspace
+                    .getConfiguration('sysml')
+                    .get<boolean>('inlayHints.enabled', false);
+                if (!enabled) {
+                    return undefined;
+                }
+                return next(document, range, token);
+            },
+        },
     };
 
     client = new LanguageClient(

@@ -11,6 +11,7 @@ export class VisualizationPanel {
     private _fileChangeDebounceTimer: ReturnType<typeof setTimeout> | undefined; // Debounce file change notifications
     private _lastContentHash: string = ''; // Cache content hash to skip unchanged updates
     private _pendingUpdate: ReturnType<typeof setTimeout> | undefined; // Coalesce rapid updates
+    private _needsUpdateWhenVisible: boolean = false; // Deferred update when panel is hidden
 
     private constructor(
         panel: vscode.WebviewPanel,
@@ -22,6 +23,15 @@ export class VisualizationPanel {
     ) {
         this._panel = panel;
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
+
+        // When the panel becomes visible again, flush any deferred update
+        this._panel.onDidChangeViewState(() => {
+            if (this._panel.visible && this._needsUpdateWhenVisible) {
+                this._needsUpdateWhenVisible = false;
+                this.updateVisualization(true);
+            }
+        }, null, this._disposables);
+
         this._panel.webview.html = this._getHtmlForWebview(this._panel.webview, extensionUri);
 
         // Request current view state from webview after initialization
@@ -133,6 +143,12 @@ export class VisualizationPanel {
     private async updateVisualization(forceUpdate: boolean = false) {
         // Skip update if we're currently navigating to prevent view reset
         if (this._isNavigating) {
+            return;
+        }
+
+        // Defer work when the panel is not visible (e.g. user switched tabs)
+        if (!this._panel.visible) {
+            this._needsUpdateWhenVisible = true;
             return;
         }
 

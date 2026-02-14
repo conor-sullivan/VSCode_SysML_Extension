@@ -78,6 +78,13 @@ function parseSysMLDocument(document: vscode.TextDocument): void {
                     // --- Model explorer update (ANTLR parse + semantic resolution) ---
                     outputChannel?.appendLine(`parseSysMLDocument: loading ${fileName}`);
                     await modelExplorerProvider.loadDocument(document, cancelSource.token);
+
+                    // --- Visualization panel update (cache-warm, no re-parse) ---
+                    // The ANTLR cache is now warm from the model explorer parse above,
+                    // so the visualization just does JSON serialization + postMessage.
+                    if (VisualizationPanel.currentPanel) {
+                        VisualizationPanel.currentPanel.notifyFileChanged(document.uri);
+                    }
                 }
             );
         } finally {
@@ -580,16 +587,9 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Update visualization only on file save for smooth editing experience
-    context.subscriptions.push(
-        vscode.workspace.onDidSaveTextDocument(document => {
-            if (document.languageId === 'sysml') {
-                if (VisualizationPanel.currentPanel) {
-                    VisualizationPanel.currentPanel.notifyFileChanged(document.uri);
-                }
-            }
-        })
-    );
+    // Visualization updates are handled as part of the centralized parse flow
+    // in parseSysMLDocument() — no need for a separate onDidSaveTextDocument
+    // handler. The file system watcher below covers external changes.
 
     // Watch for file system changes to SysML files
     const fileSystemWatcher = vscode.workspace.createFileSystemWatcher('**/*.sysml');

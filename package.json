@@ -282,6 +282,11 @@
           "type": "string",
           "default": "",
           "description": "Path to SysML v2 standard library directory."
+        },
+        "sysml.inlayHints.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable inlay hints from the SysML language server. When enabled, the server shows inline type annotations next to identifiers. **Note:** this can interfere with renaming and editing identifiers — disable if you experience editing issues."
         }
       }
     },

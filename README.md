@@ -6,13 +6,32 @@ A Visual Studio Code extension for SysML v2.0 with syntax highlighting, formatti
 
 ## Features
 
-- **Syntax Highlighting** - Full support for SysML v2.0 keywords, operators, and constructs
-- **Standard Library** - Built-in OMG standard library (Kernel, Domain, Systems libraries)
-- **Formatting** - Smart indentation and code formatting
-- **Validation** - Real-time syntax and semantic checking with VS Code Problems panel integration
-- **Navigation** - Go to Definition, Find References, Outline, Breadcrumbs, Symbol Search
-- **Model Explorer** - Tree view showing packages and elements across your workspace
-- **Interactive Diagrams** - General View, Interconnection View, Action Flow View, State Transition View, Sequence View, Case View and others with search/pan/zoom/export
+### Language Support (LSP)
+
+All language features are provided by the [sysml-v2-lsp](https://github.com/daltskin/sysml-v2-lsp) language server.
+
+- **Syntax Highlighting** — Full support for SysML v2.0 keywords, operators, and constructs via TextMate grammar and semantic tokens
+- **Standard Library** — Built-in OMG standard library (Kernel, Domain, Systems libraries)
+- **Completions** — Context-aware auto-complete with trigger characters (`.`, `:`, space)
+- **Hover** — Type information and documentation on hover
+- **Formatting** — Smart indentation and code formatting (document and range)
+- **Validation** — Real-time syntax and semantic checking with VS Code Problems panel integration
+- **Navigation** — Go to Definition, Find References, Document Symbols, Workspace Symbols, Breadcrumbs
+- **Rename** — Rename symbols with linked editing support across references
+- **Code Actions** — Quick fixes for common issues
+- **Code Lens** — Reference counts shown above definitions
+- **Folding** — Collapsible regions for blocks and nested structures
+- **Selection Ranges** — Smart expand/shrink selection
+- **Signature Help** — Parameter hints for action/calc invocations
+- **Document Links** — Clickable import paths that navigate to the target
+- **Type Hierarchy** — View supertypes and subtypes of definitions
+- **Call Hierarchy** — Trace incoming and outgoing action/state invocations
+- **Inlay Hints** — Inline type annotations next to identifiers (opt-in, off by default)
+
+### Tooling
+
+- **Model Explorer** — Tree view showing packages and elements across your workspace
+- **Interactive Diagrams** — General View, Interconnection View, Action Flow View, State Transition View, Sequence View, Case View and others with search/pan/zoom/export
 
 ## Demo
 
@@ -83,7 +102,7 @@ package MySystem {
 | `SysML: Jump to Definition`             | Navigate to the definition of the symbol under cursor       |
 | `SysML: Clear Parse Cache`              | Clear the cached parse results                              |
 | `SysML: Refresh Model Tree`             | Refresh the Model Explorer tree view                        |
-| `SysML: Debug Parser`                   | Show parser output for the current file                     |
+| `SysML: Restart Language Server`        | Restart the SysML LSP server                                |
 
 ### Context Menu
 
@@ -91,12 +110,16 @@ Right-click any folder in the Explorer → **Visualise with SysML** to aggregate
 
 ## Settings
 
-| Setting                       | Default | Description          |
-| ----------------------------- | ------- | -------------------- |
-| `sysml.validation.enabled`    | `true`  | Enable validation    |
-| `sysml.validation.realTime`   | `true`  | Real-time validation |
-| `sysml.formatting.indentSize` | `4`     | Indentation size     |
-| `sysml.formatting.useTabs`    | `false` | Use tabs             |
+| Setting                            | Default   | Description                                                                                                                                                  |
+| ---------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sysml.validation.enabled`         | `true`    | Enable SysML model validation                                                                                                                                |
+| `sysml.format.indentSize`          | `4`       | Number of spaces for indentation                                                                                                                             |
+| `sysml.visualization.defaultView`  | `"sysml"` | Default view when opening the visualizer (`sysml`, `tree`, `elk`, `bdd`, `package`, `ibd`, `graph`, `hierarchy`, `sequence`, `activity`, `state`, `usecase`) |
+| `sysml.export.defaultScale`        | `2`       | Default scale factor for PNG exports (1x–4x)                                                                                                                 |
+| `sysml.library.path`               | `""`      | Path to SysML v2 standard library directory                                                                                                                  |
+| `sysml.maxNumberOfProblems`        | `100`     | Maximum number of problems reported per file                                                                                                                 |
+| `sysml.inlayHints.enabled`         | `false`   | Enable inlay hints (inline type annotations). May interfere with renaming — disable if you experience editing issues                                         |
+| `sysmlLanguageServer.trace.server` | `"off"`   | Traces communication between VS Code and the language server (`off`, `messages`, `verbose`)                                                                  |
 
 ## Development
 
