@@ -59,18 +59,19 @@ function parseSysMLDocument(document: vscode.TextDocument): void {
             return;
         }
 
+        // Cancel in-flight worker requests when the token fires so the
+        // progress indicator doesn't linger from a stale parse.
+        const cancelSub = cancelSource.token.onCancellationRequested(() => {
+            parser.cancelPendingParses();
+        });
+
         try {
             await vscode.window.withProgress(
                 {
-                    location: vscode.ProgressLocation.Notification,
-                    title: `Parsing ${fileName}…`,
-                    cancellable: false
+                    location: vscode.ProgressLocation.Window,
+                    title: `Parsing ${fileName}…`
                 },
                 async (_progress) => {
-                    // Yield twice so the toast is painted before the sync parse blocks.
-                    await new Promise(resolve => setTimeout(resolve, 0));
-                    await new Promise(resolve => setTimeout(resolve, 0));
-
                     if (cancelSource.token.isCancellationRequested || document.isClosed) {
                         return;
                     }
@@ -88,6 +89,7 @@ function parseSysMLDocument(document: vscode.TextDocument): void {
                 }
             );
         } finally {
+            cancelSub.dispose();
             if (activeParseCancel === cancelSource) {
                 activeParseCancel = undefined;
             }

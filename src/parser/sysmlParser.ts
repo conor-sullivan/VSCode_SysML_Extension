@@ -711,6 +711,13 @@ export class SysMLParser {
     }
 
     /**
+     * Cancel all in-flight worker parse requests without terminating the worker.
+     */
+    cancelPendingParses(): void {
+        this.workerHost?.cancelAll();
+    }
+
+    /**
      * Terminate the parser Worker thread and release resources.
      */
     dispose(): void {
