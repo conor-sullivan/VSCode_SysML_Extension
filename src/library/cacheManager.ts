@@ -70,6 +70,7 @@ export class LibraryCacheManager {
             const serialized: SerializedLibrary = JSON.parse(content);
             return LibraryCompiler.deserialize(serialized);
         } catch (error) {
+            // eslint-disable-next-line no-console
             console.error('[LibraryCache] Failed to parse cache:', error);
             return null;
         }

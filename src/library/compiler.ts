@@ -94,6 +94,7 @@ export class LibraryCompiler {
 
             this.stats.totalFiles++;
         } catch (error) {
+            // eslint-disable-next-line no-console
             console.error(`[LibraryCompiler] Error compiling ${filePath}:`, error);
         }
     }
@@ -155,7 +156,7 @@ export class LibraryCompiler {
             if (!this.simpleNameIndex.has(element.name)) {
                 this.simpleNameIndex.set(element.name, []);
             }
-            this.simpleNameIndex.get(element.name)!.push(qualifiedName);
+            this.simpleNameIndex.get(element.name)?.push(qualifiedName);
 
             // Update package index
             if (element.type === 'package') {
@@ -163,7 +164,7 @@ export class LibraryCompiler {
                 this.stats.totalPackages++;
             }
             if (parentPackage && this.packages.has(parentPackage)) {
-                this.packages.get(parentPackage)!.push(qualifiedName);
+                this.packages.get(parentPackage)?.push(qualifiedName);
             }
 
             // Update specialization graph
@@ -171,7 +172,7 @@ export class LibraryCompiler {
                 if (!this.specializationGraph.has(parent)) {
                     this.specializationGraph.set(parent, new Set());
                 }
-                this.specializationGraph.get(parent)!.add(qualifiedName);
+                this.specializationGraph.get(parent)?.add(qualifiedName);
             }
 
             // Update stats
@@ -196,7 +197,7 @@ export class LibraryCompiler {
             if (['attribute', 'port', 'reference', 'action', 'state'].includes(child.type)) {
                 features.push({
                     name: child.name,
-                    kind: child.type as any,
+                    kind: child.type as LibraryFeature['kind'],
                     type: (child.attributes.get('dataType') || child.attributes.get('partType')) as string,
                     multiplicity: child.attributes.get('multiplicity') as string,
                     direction: child.attributes.get('direction') as 'in' | 'out' | 'inout',
@@ -219,7 +220,7 @@ export class LibraryCompiler {
         return allRelationships
             .filter(r => r.source === element.name)
             .map(r => ({
-                type: r.type as any,
+                type: r.type as LibraryRelationship['type'],
                 source: r.source,
                 target: r.target
             }));
@@ -271,6 +272,7 @@ export class LibraryCompiler {
     /**
      * Create mock VS Code document for parsing
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private createMockDocument(content: string, filePath: string): any {
         const lines = content.split('\n');
         return {

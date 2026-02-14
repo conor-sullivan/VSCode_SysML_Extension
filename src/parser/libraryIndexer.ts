@@ -92,6 +92,7 @@ export class LibraryIndexer {
                 }
             }
         } catch (error) {
+            // eslint-disable-next-line no-console
             console.error(`Failed to index file ${filePath}:`, error);
         }
     }

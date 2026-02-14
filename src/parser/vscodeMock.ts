@@ -30,7 +30,7 @@ export class Range {
     ) {
         if (typeof a === 'number' && typeof b === 'number') {
             this.start = new Position(a, b);
-            this.end = new Position(c!, d!);
+            this.end = new Position(c ?? 0, d ?? 0);
         } else {
             this.start = a as Position;
             this.end = b as Position;

@@ -11,6 +11,7 @@ export class VisualizationPanel {
     private _fileChangeDebounceTimer: ReturnType<typeof setTimeout> | undefined; // Debounce file change notifications
     private _lastContentHash: string = ''; // Cache content hash to skip unchanged updates
     private _pendingUpdate: ReturnType<typeof setTimeout> | undefined; // Coalesce rapid updates
+    private _needsUpdateWhenVisible: boolean = false; // Deferred update when panel is hidden
 
     private constructor(
         panel: vscode.WebviewPanel,
@@ -22,6 +23,15 @@ export class VisualizationPanel {
     ) {
         this._panel = panel;
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
+
+        // When the panel becomes visible again, flush any deferred update
+        this._panel.onDidChangeViewState(() => {
+            if (this._panel.visible && this._needsUpdateWhenVisible) {
+                this._needsUpdateWhenVisible = false;
+                this.updateVisualization(true);
+            }
+        }, null, this._disposables);
+
         this._panel.webview.html = this._getHtmlForWebview(this._panel.webview, extensionUri);
 
         // Request current view state from webview after initialization
@@ -136,6 +146,12 @@ export class VisualizationPanel {
             return;
         }
 
+        // Defer work when the panel is not visible (e.g. user switched tabs)
+        if (!this._panel.visible) {
+            this._needsUpdateWhenVisible = true;
+            return;
+        }
+
         // Check content hash first - skip expensive parsing if content unchanged
         const content = this._document.getText();
         const contentHash = this.hashContent(content);
@@ -172,6 +188,7 @@ export class VisualizationPanel {
         // CRITICAL: Remove circular references before JSON serialization
         // The collectAllElements function may have added parentElement object references
         // which create circular structures that break JSON.stringify()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         function cleanCircularRefs(obj: any): any {
             if (!obj || typeof obj !== 'object') return obj;
 
@@ -238,9 +255,12 @@ export class VisualizationPanel {
             return {
                 name: element.name,
                 type: element.type,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 id: (element as any).id || element.name,
                 attributes,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 properties: (element as any).properties || {},
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 typing: (element as any).typing,
                 children: this.convertElementsToJSON(element.children),
                 relationships: sanitizedRelationships
@@ -248,6 +268,7 @@ export class VisualizationPanel {
         });
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private logWebviewMessage(level: string, args: any[]) {
         try {
             const { getOutputChannel } = require('../extension');
@@ -272,6 +293,7 @@ export class VisualizationPanel {
             outputChannel.appendLine(`[Webview ${level.toUpperCase()}] ${prefix} ${formattedArgs}`);
         } catch (error) {
             // Silently fail if output channel not available
+            // eslint-disable-next-line no-console
             console.error('Failed to log webview message:', error);
         }
     }

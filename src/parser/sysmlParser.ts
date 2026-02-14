@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import * as vscode from 'vscode';
 import { LibraryService } from '../library/service';
 import { EnrichedElement, ResolutionResult, SemanticResolver } from '../resolver';
@@ -453,7 +454,6 @@ export class SysMLParser {
             const findUnnamedConnections = (els: SysMLElement[], depth = 0): void => {
                 for (const el of els) {
                     if (el.name === 'unnamed' && el.type === 'connection') {
-                        // eslint-disable-next-line no-console
                         console.log(`[parse] Connection at line ${el.range?.start?.line} is unnamed after ANTLR parse`);
                     }
                     if (el.children) {
@@ -711,6 +711,13 @@ export class SysMLParser {
     }
 
     /**
+     * Cancel all in-flight worker parse requests without terminating the worker.
+     */
+    cancelPendingParses(): void {
+        this.workerHost?.cancelAll();
+    }
+
+    /**
      * Terminate the parser Worker thread and release resources.
      */
     dispose(): void {
@@ -726,7 +733,6 @@ export class SysMLParser {
         return enriched.map(element => {
             // Debug: trace unnamed connections
             if (element.name === 'unnamed' && element.type === 'connection') {
-                // eslint-disable-next-line no-console
                 console.log(`[convert] Connection at line ${element.range?.start?.line} is unnamed in enriched`);
             }
 
@@ -1125,7 +1131,7 @@ export class SysMLParser {
                     const performedAction = performMatch[1];
                     // Extract just the action name (last part after dot)
                     const actionName = performedAction.includes('.')
-                        ? performedAction.split('.').pop()!
+                        ? performedAction.split('.').pop() ?? performedAction
                         : performedAction;
 
                     if (actionName && partName) {
@@ -1176,6 +1182,7 @@ export class SysMLParser {
                     actions.forEach(action => {
                         const lane = swimlaneAssignments.get(action.name);
                         if (lane) {
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
                             (action as any).lane = lane;
                         }
                     });
@@ -1238,7 +1245,7 @@ export class SysMLParser {
                     const performedAction = performMatch[1];
                     // Extract just the action name (last part after dot)
                     const actionName = performedAction.includes('.')
-                        ? performedAction.split('.').pop()!
+                        ? performedAction.split('.').pop() ?? performedAction
                         : performedAction;
 
                     if (actionName && partName) {
@@ -1287,6 +1294,7 @@ export class SysMLParser {
             actions.forEach(action => {
                 const lane = swimlaneAssignments.get(action.name);
                 if (lane) {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     (action as any).lane = lane;
                     // console.log(`[Swimlane Fallback] Applied lane '${lane}' to action '${action.name}'`);
                 }
@@ -1354,6 +1362,7 @@ export class SysMLParser {
             actions.forEach(action => {
                 const lane = swimlaneAssignments.get(action.name);
                 if (lane) {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     (action as any).lane = lane;
                     // console.log(`[Swimlane Fallback] Applied lane '${lane}' to action '${action.name}'`);
                 }
@@ -2762,6 +2771,7 @@ export class SysMLParser {
                     this.extractStructuralElements(element.children, nestedPackages, nestedParts, nestedConnections, nestedRequirements, nestedAttributes, nestedInterfaces, nestedRelationships, nestedActions, nestedStates, nestedConstraints, nestedActors, nestedUseCases, nestedOccurrences, nestedEnumerations);
 
                     // Combine all nested elements as children (packages, parts, requirements are the main structural elements)
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const packageChildren: any[] = [...nestedPackages, ...nestedParts, ...nestedRequirements];
 
                     // Also add nested packages to the global packages array for backward compatibility

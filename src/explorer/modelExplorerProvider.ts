@@ -112,6 +112,7 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<vscode.Tre
             const children: vscode.TreeItem[] = [];
 
             // Only SysML elements can have children (use property-based check instead of instanceof)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const anyElement = element as any;
 
             if (anyElement.itemType === 'sysml-element' && anyElement.element) {

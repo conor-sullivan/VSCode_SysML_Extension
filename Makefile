@@ -261,7 +261,13 @@ grammar:
 	@echo "$(YELLOW)Downloading grammar from $(GRAMMAR_REPO) release...$(NC)"
 	@if ! command -v gh >/dev/null 2>&1; then \
 		echo "$(RED)GitHub CLI (gh) is required but not installed.$(NC)"; exit 1; fi
-	gh release download --repo $(GRAMMAR_REPO) --pattern '*.g4' --pattern '*.tokens' --dir grammar --clobber
+	@mkdir -p grammar
+	@rm -rf /tmp/sysml-grammar-dl
+	@mkdir -p /tmp/sysml-grammar-dl
+	gh release download --repo $(GRAMMAR_REPO) --pattern '*.zip' --dir /tmp/sysml-grammar-dl --clobber
+	@unzip -o -j /tmp/sysml-grammar-dl/*.zip '*.g4' '*.tokens' -d grammar 2>/dev/null || \
+		unzip -o -j /tmp/sysml-grammar-dl/*.zip '*.g4' -d grammar
+	@rm -rf /tmp/sysml-grammar-dl
 	@echo "$(GREEN)Grammar downloaded successfully!$(NC)"
 	@echo "$(YELLOW)Run 'npm run antlr:generate' to compile TypeScript sources.$(NC)"
 

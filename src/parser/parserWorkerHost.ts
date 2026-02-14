@@ -34,6 +34,7 @@ export class ParserWorkerHost {
         const workerPath = path.join(__dirname, 'parserWorker.js');
         this.worker = new Worker(workerPath);
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.worker.on('message', (msg: any) => {
             const req = this.pending.get(msg.id);
             if (!req) { return; } // stale / cancelled
@@ -75,13 +76,35 @@ export class ParserWorkerHost {
     async parseDocument(
         text: string,
         uri: string,
-        includeErrors: boolean
+        includeErrors: boolean,
+        timeoutMs = 30_000
     ): Promise<ParseWorkerResult> {
         const worker = this.ensureWorker();
         const id = ++this.nextId;
 
         return new Promise<ParseWorkerResult>((resolve, reject) => {
-            this.pending.set(id, { resolve, reject });
+            let timer: ReturnType<typeof setTimeout> | undefined;
+
+            const cleanup = () => {
+                if (timer) { globalThis.clearTimeout(timer); timer = undefined; }
+                this.pending.delete(id);
+            };
+
+            this.pending.set(id, {
+                resolve: (result) => { cleanup(); resolve(result); },
+                reject:  (err)    => { cleanup(); reject(err); }
+            });
+
+            if (timeoutMs > 0) {
+                timer = setTimeout(() => {
+                    const req = this.pending.get(id);
+                    if (req) {
+                        this.pending.delete(id);
+                        reject(new Error(`Parse timed out after ${timeoutMs} ms`));
+                    }
+                }, timeoutMs);
+            }
+
             worker.postMessage({ type: 'parse', id, text, uri, includeErrors });
         });
     }
@@ -113,6 +136,7 @@ export class ParserWorkerHost {
      * Recursively converts plain `{start, end}` range objects that came
      * through `structuredClone` into proper `vscode.Range` instances.
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private reconstructRanges(elements: any[]): SysMLElement[] {
         for (const el of elements) {
             if (el.range?.start != null && el.range?.end != null) {
