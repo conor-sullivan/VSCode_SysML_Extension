@@ -1,8 +1,10 @@
-
 {
   "comments": {
     "lineComment": "//",
-    "blockComment": ["/*", "*/"]
+    "blockComment": [
+      "/*",
+      "*/"
+    ]
   },
   "brackets": [
     ["{", "}"],
@@ -13,15 +15,16 @@
     { "open": "{", "close": "}" },
     { "open": "[", "close": "]" },
     { "open": "(", "close": ")" },
+    { "open": "'", "close": "'", "notIn": ["string", "comment"] },
     { "open": "\"", "close": "\"", "notIn": ["string"] },
-    { "open": "'", "close": "'", "notIn": ["string", "comment"] }
+    { "open": "/*", "close": " */", "notIn": ["string"] }
   ],
   "surroundingPairs": [
     ["{", "}"],
     ["[", "]"],
     ["(", ")"],
-    ["\"", "\""],
-    ["'", "'"]
+    ["'", "'"],
+    ["\"", "\""]
   ],
   "folding": {
     "markers": {
@@ -29,9 +32,40 @@
       "end": "^\\s*//\\s*#?endregion\\b"
     }
   },
-  "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
   "indentationRules": {
-    "increaseIndentPattern": "^((?!\\/\\/).)*(\\{[^}\"'`]*|\\([^)\"'`]*|\\[[^\\]\"'`]*)$",
-    "decreaseIndentPattern": "^((?!.*?\\/\\*).*\\*/)?\\s*[\\}\\]].*$"
-  }
+    "increaseIndentPattern": "^.*\\{[^}]*$",
+    "decreaseIndentPattern": "^\\s*\\}"
+  },
+  "onEnterRules": [
+    {
+      "beforeText": "^\\s*\\/\\*\\*(?!\\/)([^\\*]|\\*(?!\\/))*$",
+      "afterText": "^\\s*\\*\\/$",
+      "action": {
+        "indent": "indentAction.indentOutdent",
+        "appendText": " * "
+      }
+    },
+    {
+      "beforeText": "^\\s*\\/\\*\\*(?!\\/)([^\\*]|\\*(?!\\/))*$",
+      "action": {
+        "indent": "indentAction.none",
+        "appendText": " * "
+      }
+    },
+    {
+      "beforeText": "^(\\s+)\\*(\\s+.*)?$",
+      "action": {
+        "indent": "indentAction.none",
+        "appendText": "* "
+      }
+    },
+    {
+      "beforeText": "^(\\s+)\\*\\/\\s*$",
+      "action": {
+        "indent": "indentAction.none",
+        "removeText": 1
+      }
+    }
+  ],
+  "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)"
 }

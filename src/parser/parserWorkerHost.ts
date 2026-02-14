@@ -34,6 +34,7 @@ export class ParserWorkerHost {
         const workerPath = path.join(__dirname, 'parserWorker.js');
         this.worker = new Worker(workerPath);
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.worker.on('message', (msg: any) => {
             const req = this.pending.get(msg.id);
             if (!req) { return; } // stale / cancelled
@@ -113,6 +114,7 @@ export class ParserWorkerHost {
      * Recursively converts plain `{start, end}` range objects that came
      * through `structuredClone` into proper `vscode.Range` instances.
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private reconstructRanges(elements: any[]): SysMLElement[] {
         for (const el of elements) {
             if (el.range?.start != null && el.range?.end != null) {

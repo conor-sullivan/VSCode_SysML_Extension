@@ -172,6 +172,7 @@ export class VisualizationPanel {
         // CRITICAL: Remove circular references before JSON serialization
         // The collectAllElements function may have added parentElement object references
         // which create circular structures that break JSON.stringify()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         function cleanCircularRefs(obj: any): any {
             if (!obj || typeof obj !== 'object') return obj;
 
@@ -238,9 +239,12 @@ export class VisualizationPanel {
             return {
                 name: element.name,
                 type: element.type,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 id: (element as any).id || element.name,
                 attributes,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 properties: (element as any).properties || {},
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 typing: (element as any).typing,
                 children: this.convertElementsToJSON(element.children),
                 relationships: sanitizedRelationships
@@ -248,6 +252,7 @@ export class VisualizationPanel {
         });
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private logWebviewMessage(level: string, args: any[]) {
         try {
             const { getOutputChannel } = require('../extension');
@@ -272,6 +277,7 @@ export class VisualizationPanel {
             outputChannel.appendLine(`[Webview ${level.toUpperCase()}] ${prefix} ${formattedArgs}`);
         } catch (error) {
             // Silently fail if output channel not available
+            // eslint-disable-next-line no-console
             console.error('Failed to log webview message:', error);
         }
     }

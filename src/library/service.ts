@@ -44,21 +44,30 @@ export class LibraryService {
     }
 
     /**
+     * Returns the compiled library, throwing if not initialized.
+     */
+    private get lib(): CompiledLibrary {
+        this.ensureInitialized();
+        if (!this.library) {
+            throw new Error('Library not available after initialization');
+        }
+        return this.library;
+    }
+
+    /**
      * Lookup symbol by qualified name
      */
     public getSymbol(qualifiedName: string): LibrarySymbol | undefined {
-        this.ensureInitialized();
-        return this.library!.symbols.get(qualifiedName);
+        return this.lib.symbols.get(qualifiedName);
     }
 
     /**
      * Lookup symbols by simple name (may return multiple)
      */
     public getSymbolsByName(name: string): LibrarySymbol[] {
-        this.ensureInitialized();
-        const qualifiedNames = this.library!.simpleNameIndex.get(name) || [];
+        const qualifiedNames = this.lib.simpleNameIndex.get(name) || [];
         return qualifiedNames
-            .map(qn => this.library!.symbols.get(qn))
+            .map(qn => this.lib.symbols.get(qn))
             .filter(s => s !== undefined) as LibrarySymbol[];
     }
 
@@ -66,18 +75,16 @@ export class LibraryService {
      * Check if a symbol exists
      */
     public hasSymbol(qualifiedName: string): boolean {
-        this.ensureInitialized();
-        return this.library!.symbols.has(qualifiedName);
+        return this.lib.symbols.has(qualifiedName);
     }
 
     /**
      * Get all symbols in a package
      */
     public getPackageSymbols(packageName: string): LibrarySymbol[] {
-        this.ensureInitialized();
-        const childNames = this.library!.packages.get(packageName) || [];
+        const childNames = this.lib.packages.get(packageName) || [];
         return childNames
-            .map(name => this.library!.symbols.get(name))
+            .map(name => this.lib.symbols.get(name))
             .filter(s => s !== undefined) as LibrarySymbol[];
     }
 
@@ -97,6 +104,7 @@ export class LibraryService {
 
             // Prevent infinite loops
             if (chain.length > 100) {
+                // eslint-disable-next-line no-console
                 console.warn('[LibraryService] Specialization chain too deep for', typeName);
                 break;
             }
@@ -110,7 +118,7 @@ export class LibraryService {
      */
     public getSubtypes(typeName: string): string[] {
         this.ensureInitialized();
-        const subtypes = this.library!.specializationGraph.get(typeName);
+        const subtypes = this.lib.specializationGraph.get(typeName);
         return subtypes ? Array.from(subtypes) : [];
     }
 
@@ -130,7 +138,7 @@ export class LibraryService {
         const lowerQuery = query.toLowerCase();
         const results: LibrarySymbol[] = [];
 
-        for (const symbol of this.library!.symbols.values()) {
+        for (const symbol of this.lib.symbols.values()) {
             if (symbol.name.toLowerCase().includes(lowerQuery) ||
                 symbol.qualifiedName.toLowerCase().includes(lowerQuery)) {
                 results.push(symbol);
@@ -150,7 +158,7 @@ export class LibraryService {
         this.ensureInitialized();
         const results: LibrarySymbol[] = [];
 
-        for (const symbol of this.library!.symbols.values()) {
+        for (const symbol of this.lib.symbols.values()) {
             if (symbol.kind === kind) {
                 results.push(symbol);
             }
@@ -164,7 +172,7 @@ export class LibraryService {
      */
     public getStats() {
         this.ensureInitialized();
-        return { ...this.library!.stats };
+        return { ...this.lib.stats };
     }
 
     /**
@@ -172,7 +180,7 @@ export class LibraryService {
      */
     public getVersion(): string {
         this.ensureInitialized();
-        return this.library!.version;
+        return this.lib.version;
     }
 
     /**

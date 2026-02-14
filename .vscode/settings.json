@@ -39,5 +39,15 @@
     "json": true,
     "markdown": true
   },
-  "makefile.configureOnOpen": false
+  "makefile.configureOnOpen": false,
+  "mcp": {
+    "servers": {
+      "sysml-v2": {
+        "command": "node",
+        "args": [
+          "${workspaceFolder}/node_modules/sysml-v2-lsp/dist/server/mcpServer.mjs"
+        ]
+      }
+    }
+  }
 }

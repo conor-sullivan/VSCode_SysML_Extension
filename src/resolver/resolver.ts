@@ -29,6 +29,7 @@ export class SemanticResolver {
      * Resolve and validate parsed elements
      */
     public async resolve(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         elements: any[],
         uri: vscode.Uri
     ): Promise<ResolutionResult> {
@@ -70,6 +71,7 @@ export class SemanticResolver {
      * Enrich a single element with semantic information
      */
     private async enrichElement(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         element: any,
         _uri: vscode.Uri
     ): Promise<EnrichedElement> {
@@ -239,6 +241,7 @@ export class SemanticResolver {
      */
     private async validatePorts(
         elementName: string,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ports: any[],
         _resolvedType: ResolvedType
     ): Promise<SemanticDiagnostic[]> {
@@ -406,6 +409,7 @@ export class SemanticResolver {
     /**
      * Create a range from element position data
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private createRange(element: any): vscode.Range {
         // First, check if the element already has a proper range object from the parser
         if (element.range && element.range instanceof vscode.Range) {
@@ -436,6 +440,7 @@ export class SemanticResolver {
      * Extract typing information from element attributes
      * (e.g., "part vehicle : Vehicle" has typing="Vehicle")
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private getTyping(element: any): string | null {
         if (!element.attributes) {
             return null;
@@ -455,6 +460,7 @@ export class SemanticResolver {
      * Extract specialization list from element attributes
      * (e.g., "part vehicle :> BaseVehicle" has specializes=["BaseVehicle"])
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private getSpecializes(element: any): string[] | null {
         if (!element.attributes) {
             return null;

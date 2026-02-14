@@ -14,3 +14,22 @@ node_modules/**/*.md
 node_modules/**/*.ts
 node_modules/**/tsconfig.json
 node_modules/**/.eslintrc*
+
+# Build/dev artifacts
+.venv/**
+.sysml-cache/**
+.devcontainer/**
+.github/**
+.nvmrc
+tsconfig.tsbuildinfo
+grammar/**
+tools/**
+scripts/**
+schemas/**
+samples/**
+docs/**
+test-output/**
+assets/**
+Makefile
+eslint.config.js
+ARCHITECTURE.md

@@ -2,7 +2,7 @@
   "name": "sysml-v2-support",
   "displayName": "SysML v2.0 Language Support",
   "description": "Complete SysML v2.0 support with visualiser, including syntax highlighting, formatting, validation, navigation, and interactive views",
-  "version": "0.13.0",
+  "version": "0.17.0",
   "publisher": "JamieD",
   "license": "MIT",
   "icon": "icon.png",
@@ -11,7 +11,7 @@
     "url": "https://github.com/daltskin/VSCode_SysML_Extension.git"
   },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.99.0"
   },
   "categories": [
     "Programming Languages",
@@ -37,7 +37,6 @@
     "onCommand:sysml.exportVisualization",
     "onCommand:sysml.refreshModelTree",
     "onCommand:sysml.refreshVisualization",
-    "onCommand:sysml.debugParser",
     "onCommand:sysml.jumpToDefinition"
   ],
   "main": "./out/extension.js",
@@ -61,6 +60,12 @@
         "language": "sysml",
         "scopeName": "source.sysml",
         "path": "./syntaxes/sysml.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "sysml",
+        "path": "./snippets/sysml.json"
       }
     ],
     "commands": [
@@ -128,10 +133,10 @@
         "category": "SysML"
       },
       {
-        "command": "sysml.debugParser",
-        "title": "Debug Parser",
+        "command": "sysml.restartServer",
+        "title": "Restart Language Server",
         "category": "SysML",
-        "icon": "$(bug)"
+        "icon": "$(debug-restart)"
       },
       {
         "command": "sysml.refreshVisualization",
@@ -172,10 +177,6 @@
         },
         {
           "command": "sysml.changeVisualizerView"
-        },
-        {
-          "command": "sysml.debugParser",
-          "when": "resourceLangId == sysml"
         }
       ],
       "explorer/context": [
@@ -258,9 +259,38 @@
           ],
           "default": 2,
           "markdownDescription": "Default scale factor for PNG exports. Higher values produce larger, higher-quality images.\n- 1x: Original size\n- 2x: Double size (default, good quality)\n- 3x: Triple size (high quality)\n- 4x: Quadruple size (very high quality, large files)"
+        },
+        "sysmlLanguageServer.trace.server": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the SysML language server."
+        },
+        "sysml.maxNumberOfProblems": {
+          "scope": "resource",
+          "type": "number",
+          "default": 100,
+          "description": "Maximum number of problems reported per file."
+        },
+        "sysml.library.path": {
+          "scope": "resource",
+          "type": "string",
+          "default": "",
+          "description": "Path to SysML v2 standard library directory."
         }
       }
-    }
+    },
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "sysml-v2-mcp",
+        "label": "SysML v2 Model Context"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run antlr:generate && npm run compile && npm run build:webview-assets",
@@ -269,7 +299,7 @@
     "antlr:parser": "cd grammar && java -Xss16m -jar ../tools/antlr-4.13.2-complete.jar -Dlanguage=TypeScript -visitor -no-listener -o ../src/parser/generated/grammar SysMLv2Parser.g4",
     "antlr:postprocess": "node scripts/postprocess-antlr.js",
     "antlr:clean": "rimraf src/parser/generated",
-    "grammar:download": "gh release download --repo daltskin/sysml-v2-grammar --pattern '*.g4' --pattern '*.tokens' --dir grammar --clobber",
+    "grammar:download": "mkdir -p grammar && rm -rf /tmp/sysml-grammar-dl && mkdir -p /tmp/sysml-grammar-dl && gh release download --repo daltskin/sysml-v2-grammar --pattern '*.zip' --dir /tmp/sysml-grammar-dl --clobber && unzip -o -j /tmp/sysml-grammar-dl/*.zip '*.g4' -d grammar && rm -rf /tmp/sysml-grammar-dl",
     "grammar:full": "npm run grammar:download && npm run antlr:generate",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
@@ -279,10 +309,7 @@
     "test:views": "node ./scripts/test-all-views.js",
     "test:parser": "node ./scripts/test-parser-standalone.js",
     "test:visual": "node ./scripts/generate-visual-test-guide.js",
-    "test:debug": "node ./scripts/debug-view-data.js",
     "test:all": "node ./scripts/run-all-tests.js",
-    "debug": "npm run compile && node ./out/debug/runDebug.js",
-    "debug:elk": "node ./scripts/debug-elk-rendering.js",
     "build:webview-assets": "node ./scripts/copy-webview-assets.js",
     "lint": "eslint src --ext ts",
     "lint:fix": "eslint src --ext ts --fix",
@@ -301,7 +328,7 @@
     "@eslint/js": "^9.15.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^24.10.1",
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "^1.99.0",
     "@typescript-eslint/eslint-plugin": "^8.15.0",
     "@typescript-eslint/parser": "^8.15.0",
     "@vscode/test-electron": "^2.4.1",
@@ -320,7 +347,9 @@
   },
   "dependencies": {
     "antlr4": "^4.13.2",
-    "elkjs": "^0.11.0"
+    "elkjs": "^0.11.0",
+    "sysml-v2-lsp": "^0.1.4",
+    "vscode-languageclient": "^9.0.1"
   },
   "overrides": {
     "diff": "^8.0.3"

@@ -242,7 +242,7 @@ package NavigationTest {
                     if (!elementsByName.has(el.name)) {
                         elementsByName.set(el.name, []);
                     }
-                    elementsByName.get(el.name)!.push(el);
+                    elementsByName.get(el.name)?.push(el);
                 }
             });
 

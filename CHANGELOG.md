@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0]
+
+### Added
+
+- Language Server Protocol (LSP) integration via the [`sysml-v2-lsp`](https://www.npmjs.com/package/sysml-v2-lsp) package — all language intelligence features (diagnostics, completions, hover, go-to-definition, references, rename, formatting, code actions, semantic tokens, CodeLens, inlay hints, type/call hierarchy, document symbols, folding ranges, selection ranges, workspace symbols) now provided by the language server
+- New LSP client module (`src/lsp/client.ts`) managing server lifecycle over IPC transport
+- `sysml.restartServer` command to restart the language server on demand
+- Configuration settings: `sysml.trace.server` (off/messages/verbose), `sysml.maxNumberOfProblems`, `sysml.library.path`
+- New test suite `lspClient.test.ts` covering LSP diagnostics, hover, document symbols, and completions
+
+### Changed
+
+- Extension architecture: language features delegated to LSP server instead of in-extension providers
+- Local ANTLR parser retained only for visualization panel and model explorer tree view
+- `parseSysMLDocument()` simplified — parse gate mechanism and inline validation removed
+- `validateModel` command now reports `vscode.languages.getDiagnostics()` count from the LSP server
+- `deactivate()` now stops the LSP client
+- Updated `ARCHITECTURE.md` to reflect LSP client/server architecture
+
+### Removed
+
+- In-extension provider registrations: `SysMLFormatter`, `SysMLDefinitionProvider`, `SysMLDocumentSymbolProvider`, `SysMLCompletionProvider`, `SysMLCodeActionProvider`, `SysMLValidator`
+- `LibraryService` initialization from extension activation (LSP handles library resolution)
+- `getLibraryService()` export from extension module
+- Test files for removed providers: `formatter.test.ts`, `navigation.test.ts`, `validator.test.ts`
+
 ## [0.16.0]
 
 ### Changed

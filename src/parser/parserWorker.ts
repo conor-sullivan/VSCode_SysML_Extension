@@ -11,7 +11,7 @@
  * mock is ready.
  */
 
-/* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ── Step 1: Intercept `require('vscode')` ────────────────────────────
 // Must happen before ANY module that `import * as vscode from 'vscode'`.
@@ -81,9 +81,9 @@ parentPort?.on('message', (msg: any) => {
             const doc = createMockDocument(msg.text, msg.uri);
             const elements      = antlrParser.parseDocument(doc, msg.includeErrors ?? false);
             const relationships = antlrParser.getRelationships();
-            parentPort!.postMessage({ id: msg.id, type: 'result', elements, relationships });
+            parentPort?.postMessage({ id: msg.id, type: 'result', elements, relationships });
         } catch (err: unknown) {
-            parentPort!.postMessage({
+            parentPort?.postMessage({
                 id: msg.id,
                 type: 'error',
                 error: err instanceof Error ? err.message : String(err),
