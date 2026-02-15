@@ -5,6 +5,16 @@ All notable changes to the SysML v2.0 Language Support extension will be documen
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0]
+
+### Fixed
+
+- **Comprehensive keyword validator fix**: eliminated ~100 false-positive "Unexpected identifier where a SysML keyword was expected" diagnostics by adding missing tokens to `NAME_PRECEDING_KEYWORDS` — covers KerML elements, annotations, control nodes, reference-preceding keywords, succession/flow tokens, relationship keywords, modifiers, visibility keywords, and punctuation (e.g. `attribute redefines`, `<'short-name'> identifier`, `exhibit`, `perform`, `include`, etc.)
+
+### Changed
+
+- Updated `sysml-v2-lsp` dependency from 0.1.6 to 0.1.7
+
 ## [0.19.0]
 
 ### Added
