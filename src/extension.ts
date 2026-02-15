@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs';
 import { ModelExplorerProvider } from './explorer/modelExplorerProvider';
 import { LibraryService } from './library/service';
 import { startLanguageClient, stopLanguageClient } from './lsp/client';
@@ -116,8 +118,14 @@ export function activate(context: vscode.ExtensionContext) {
     // ─── MCP Server ────────────────────────────────────────────────
     // Register the sysml-v2-lsp MCP server so Copilot / agent mode
     // can discover SysML tools, resources, and prompts.
-    try {
-        const { mcpServerPath } = require('sysml-v2-lsp');
+    // NOTE: We resolve the path directly rather than require('sysml-v2-lsp')
+    // because the upstream package's "main" field points to a non-existent
+    // file, causing CJS require to fail even though "exports" is correct.
+    const mcpServerPath = path.join(
+        context.extensionPath, 'node_modules', 'sysml-v2-lsp',
+        'dist', 'server', 'mcpServer.mjs'
+    );
+    if (fs.existsSync(mcpServerPath)) {
         const emitter = new vscode.EventEmitter<void>();
         context.subscriptions.push(emitter);
         context.subscriptions.push(
@@ -127,14 +135,14 @@ export function activate(context: vscode.ExtensionContext) {
                     new vscode.McpStdioServerDefinition(
                         'SysML v2 Model Context',
                         'node',
-                        [mcpServerPath as string]
+                        [mcpServerPath]
                     )
                 ],
             })
         );
         outputChannel.appendLine(`MCP server registered: ${mcpServerPath}`);
-    } catch (err) {
-        outputChannel.appendLine(`Warning: MCP server registration failed: ${err instanceof Error ? err.message : err}`);
+    } else {
+        outputChannel.appendLine(`Warning: MCP server not found at ${mcpServerPath}`);
     }
 
     // ─── Standard Library ──────────────────────────────────────────
