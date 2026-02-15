@@ -2361,11 +2361,11 @@ class SysMLElementVisitor extends SysMLv2ParserVisitor<void> {
             relationships: []
         };
 
-        // Add to parent or root
+        // Add to parent or root (same pattern as createElement)
         if (this.parentStack.length > 0) {
             this.parentStack[this.parentStack.length - 1].children.push(element);
         } else {
-            this.rootElements.push(element);
+            this.elements.set(name || `comment_${range.start.line}`, element);
         }
 
         this.parentStack.push(element);

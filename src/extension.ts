@@ -5,11 +5,13 @@ import { ModelExplorerProvider } from './explorer/modelExplorerProvider';
 import { LibraryService } from './library/service';
 import { startLanguageClient, stopLanguageClient } from './lsp/client';
 import { SysMLParser } from './parser/sysmlParser';
+import { DiagnosticFormatter } from './resolver';
 import { VisualizationPanel } from './visualization/visualizationPanel';
 
 let modelExplorerProvider: ModelExplorerProvider;
 let parser: SysMLParser;
 let outputChannel: vscode.OutputChannel;
+let semanticDiagnosticFormatter: DiagnosticFormatter;
 
 let parseDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 let activeParseCancel: vscode.CancellationTokenSource | undefined;
@@ -81,6 +83,14 @@ function parseSysMLDocument(document: vscode.TextDocument): void {
                     // --- Model explorer update (ANTLR parse + semantic resolution) ---
                     outputChannel?.appendLine(`parseSysMLDocument: loading ${fileName}`);
                     await modelExplorerProvider.loadDocument(document, cancelSource.token);
+
+                    // --- Publish resolver diagnostics (enum keyword, import checks) ---
+                    try {
+                        const resolutionResult = await parser.parseWithSemanticResolution(document);
+                        semanticDiagnosticFormatter.publish(document.uri, resolutionResult.diagnostics);
+                    } catch (err) {
+                        outputChannel?.appendLine(`Semantic diagnostics failed: ${err instanceof Error ? err.message : err}`);
+                    }
 
                     // --- Visualization panel update (cache-warm, no re-parse) ---
                     // The ANTLR cache is now warm from the model explorer parse above,
@@ -154,6 +164,12 @@ export function activate(context: vscode.ExtensionContext) {
     // ─── Parser (visualization & model explorer only) ──────────────
     parser = new SysMLParser();
 
+    // ─── Semantic Diagnostics (enum keyword, import checks) ────────
+    semanticDiagnosticFormatter = new DiagnosticFormatter('SysML Semantic');
+    context.subscriptions.push(
+        { dispose: () => semanticDiagnosticFormatter.dispose() }
+    );
+
     // ─── Model Explorer ────────────────────────────────────────────
     modelExplorerProvider = new ModelExplorerProvider(parser);
     vscode.window.registerTreeDataProvider('sysmlModelExplorer', modelExplorerProvider);
@@ -173,11 +189,17 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('sysml.validateModel', async () => {
             const editor = vscode.window.activeTextEditor;
             if (editor && editor.document.languageId === 'sysml') {
-                // Diagnostics are provided continuously by the LSP server.
-                // This command now shows the current diagnostic count.
+                // Run semantic resolution to get enum/import diagnostics
+                try {
+                    const resolutionResult = await parser.parseWithSemanticResolution(editor.document);
+                    semanticDiagnosticFormatter.publish(editor.document.uri, resolutionResult.diagnostics);
+                } catch {
+                    // Fallback — semantic diagnostics unavailable
+                }
+                // Show combined diagnostic count (LSP + semantic)
                 const diagnostics = vscode.languages.getDiagnostics(editor.document.uri);
                 vscode.window.showInformationMessage(
-                    `Validation: ${diagnostics.length} issue(s) reported by language server`
+                    `Validation: ${diagnostics.length} issue(s) found`
                 );
             }
         })

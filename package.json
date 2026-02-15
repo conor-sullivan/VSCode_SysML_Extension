@@ -353,7 +353,7 @@
   "dependencies": {
     "antlr4": "^4.13.2",
     "elkjs": "^0.11.0",
-    "sysml-v2-lsp": "^0.1.5",
+    "sysml-v2-lsp": "^0.1.6",
     "vscode-languageclient": "^9.0.1"
   },
   "overrides": {

@@ -26,12 +26,16 @@ export class SemanticResolver {
     }
 
     /**
-     * Resolve and validate parsed elements
+     * Resolve and validate parsed elements.
+     * @param elements  Parsed AST elements
+     * @param uri       Document URI
+     * @param documentText  Optional full document text — enables import / enum-keyword checks
      */
     public async resolve(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         elements: any[],
-        uri: vscode.Uri
+        uri: vscode.Uri,
+        documentText?: string
     ): Promise<ResolutionResult> {
         const enrichedElements: EnrichedElement[] = [];
         const allDiagnostics: SemanticDiagnostic[] = [];
@@ -52,10 +56,21 @@ export class SemanticResolver {
 
             // Recursively process children
             if (element.children && element.children.length > 0) {
-                const childResult = await this.resolve(element.children, uri);
+                const childResult = await this.resolve(element.children, uri, documentText);
                 enriched.children = childResult.elements;
                 allDiagnostics.push(...childResult.diagnostics);
             }
+        }
+
+        // ── Additional validation passes (require document text) ──
+        if (documentText) {
+            // Check for enum literals missing the 'enum' keyword prefix
+            const enumDiags = this.validateEnumLiterals(elements, documentText);
+            allDiagnostics.push(...enumDiags);
+
+            // Check for standard library types used without an import statement
+            const importDiags = this.validateStandardImports(elements, documentText);
+            allDiagnostics.push(...importDiags);
         }
 
         const stats = this.calculateStats(enrichedElements, allDiagnostics);
@@ -516,5 +531,142 @@ export class SemanticResolver {
         ];
 
         return commonTypes.includes(typeName);
+    }
+
+    // ── Enum-literal validation ────────────────────────────────────
+    /**
+     * Walk all `enumeration def` elements and verify that each child
+     * (enumeration literal) is prefixed with the `enum` keyword in the
+     * source text.  The ANTLR grammar accepts `ENUM?` (optional), but the
+     * SysML v2 spec requires it, and some downstream parsers (incl. the
+     * visualizer) may reject the bare form.
+     */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    private validateEnumLiterals(elements: any[], documentText: string): SemanticDiagnostic[] {
+        const diagnostics: SemanticDiagnostic[] = [];
+        const lines = documentText.split('\n');
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const walk = (elems: any[]) => {
+            for (const el of elems) {
+                if (el.type === 'enumeration def' && el.children) {
+                    for (const child of el.children) {
+                        // Children of an enum def are enumeration literals
+                        if (child.type === 'enumeration' || child.type === 'entry' || child.type === 'attribute' || child.name) {
+                            const line = child.range?.start?.line;
+                            if (line !== undefined && line < lines.length) {
+                                const srcLine = lines[line].trim();
+                                // Check whether the source line starts with 'enum '
+                                if (!srcLine.startsWith('enum ') && !srcLine.startsWith('enum\t')) {
+                                    diagnostics.push(
+                                        DiagnosticFactory.missingEnumKeyword(
+                                            child.name || 'unnamed',
+                                            el.name,
+                                            this.createRange(child)
+                                        )
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                if (el.children) {
+                    walk(el.children);
+                }
+            }
+        };
+
+        walk(elements);
+        return diagnostics;
+    }
+
+    // ── Standard-library import validation ─────────────────────────
+    /** Map of unqualified type names to the import that provides them. */
+    private static readonly IMPORT_SUGGESTIONS: Record<string, string> = {
+        'String':   'ScalarValues::*',
+        'Integer':  'ScalarValues::*',
+        'Boolean':  'ScalarValues::*',
+        'Real':     'ScalarValues::*',
+        'Natural':  'ScalarValues::*',
+        'Number':   'NumericalValues::*',
+        'Complex':  'ScalarValues::*',
+    };
+
+    /**
+     * Scan the document for use of well-known standard library types and
+     * verify that the corresponding import is present.  Emits a warning
+     * when, e.g., `String` is referenced but `ScalarValues::*` is not
+     * imported.
+     */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    private validateStandardImports(elements: any[], documentText: string): SemanticDiagnostic[] {
+        const diagnostics: SemanticDiagnostic[] = [];
+
+        // Collect all import statements from the source text
+        const importRegex = /import\s+(\S+)\s*;/g;
+        const imports = new Set<string>();
+        let m;
+        while ((m = importRegex.exec(documentText)) !== null) {
+            imports.add(m[1]);
+        }
+        // Also handle `private import ...;`
+        const privateImportRegex = /private\s+import\s+(\S+)\s*;/g;
+        while ((m = privateImportRegex.exec(documentText)) !== null) {
+            imports.add(m[1]);
+        }
+
+        // Collect type names that appear as attribute types or element typings
+        const usedTypes = new Set<string>();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const collectTypes = (elems: any[]) => {
+            for (const el of elems) {
+                const typing = this.getTyping(el);
+                if (typing) {
+                    usedTypes.add(typing);
+                }
+                // Also check dataType attribute (used by attribute elements)
+                const dataType = el.attributes instanceof Map
+                    ? el.attributes.get('dataType') as string
+                    : el.attributes?.dataType;
+                if (dataType) {
+                    usedTypes.add(dataType);
+                }
+                if (el.children) {
+                    collectTypes(el.children);
+                }
+            }
+        };
+        collectTypes(elements);
+
+        // For each used type, check if it needs an import
+        const alreadyWarned = new Set<string>();
+        for (const typeName of usedTypes) {
+            const suggestedImport = SemanticResolver.IMPORT_SUGGESTIONS[typeName];
+            if (!suggestedImport) {
+                continue; // Not a known standard library type
+            }
+            if (imports.has(suggestedImport)) {
+                continue; // Already imported
+            }
+            // Check if the fully-qualified form is used (e.g. ScalarValues::String)
+            if (imports.has(`ScalarValues::${typeName}`)) {
+                continue;
+            }
+            // Avoid duplicate warnings for the same import suggestion
+            if (alreadyWarned.has(suggestedImport)) {
+                continue;
+            }
+            alreadyWarned.add(suggestedImport);
+
+            diagnostics.push(
+                DiagnosticFactory.missingImport(
+                    typeName,
+                    suggestedImport,
+                    new vscode.Range(0, 0, 0, 0) // Top-of-file range for import suggestion
+                )
+            );
+        }
+
+        return diagnostics;
     }
 }

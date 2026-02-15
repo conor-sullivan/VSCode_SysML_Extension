@@ -601,8 +601,9 @@ export class SysMLParser {
             const elements = await this.parseAsync(document);
 
             // Then resolve types and validate against library
+            // Pass document text to enable enum-keyword and import validation
             const resolver = this.getSemanticResolver();
-            const result = await resolver.resolve(elements, document.uri);
+            const result = await resolver.resolve(elements, document.uri, document.getText());
 
             // Cache the resolution result
             this.resolutionCache.set(uri, {
@@ -2935,16 +2936,32 @@ export class SysMLParser {
                     break;
 
                 case 'enumeration':
-                case 'enumeration def':
+                case 'enumeration def': {
+                    // Extract enum literals from children
+                    const literals: StructuralEnumerationLiteral[] = [];
+                    if (element.children) {
+                        for (const child of element.children) {
+                            if (child.name && child.name !== 'unnamed') {
+                                literals.push({
+                                    name: child.name,
+                                    value: child.attributes instanceof Map
+                                        ? child.attributes.get('value') as string | undefined
+                                        : undefined,
+                                    range: child.range
+                                });
+                            }
+                        }
+                    }
                     enumerations.push({
                         name: element.name,
                         type: element.type as 'enumeration' | 'enumeration def',
                         visibility,
                         documentation: element.attributes.get('documentation') as string,
-                        literals: [],
+                        literals,
                         range: element.range
                     });
                     break;
+                }
             }
 
             // Extract relationships

@@ -5,6 +5,24 @@ All notable changes to the SysML v2.0 Language Support extension will be documen
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0]
+
+### Added
+
+- **Semantic validation for enum literals**: warns when enumeration members inside `enum def` are missing the required `enum` keyword prefix (e.g. bare `condenser;` → should be `enum condenser;`)
+- **Missing import detection**: warns when standard-library types (`String`, `Integer`, `Boolean`, `Real`, `Natural`, `Number`, `Complex`) are used without the corresponding `import ScalarValues::*` (or `NumericalValues::*`) statement, with a suggested fix
+- **Semantic diagnostics surface in Problems panel**: resolver warnings (enum keyword, missing imports, unresolved types) now appear as VS Code diagnostics alongside LSP diagnostics
+- Enumeration literals are now properly extracted into the structural diagram data (previously always empty)
+
+### Fixed
+
+- MCP / Visualizer parser alignment: the extension's semantic resolver now detects issues that the MCP `parse` / `validate` tools miss (permissive ANTLR grammar accepts `ENUM?` optional), preventing the false-confidence loop where MCP reports 0 errors but the visualizer shows "Parse Error"
+- `sysml.validateModel` command now runs the full semantic resolution pass instead of only showing LSP diagnostic count
+
+### Changed
+
+- Updated `sysml-v2-lsp` dependency from 0.1.5 to 0.1.6
+
 ## [0.18.0]
 
 ### Added

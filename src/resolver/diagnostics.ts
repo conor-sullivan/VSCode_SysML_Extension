@@ -219,6 +219,48 @@ export class DiagnosticFactory {
     }
 
     /**
+     * Create missing enum keyword diagnostic.
+     * Per the SysML v2 spec, enumeration literals should be prefixed with `enum`.
+     */
+    public static missingEnumKeyword(
+        literalName: string,
+        enumDefName: string,
+        range: vscode.Range
+    ): SemanticDiagnostic {
+        return {
+            code: 'missing-enum-keyword',
+            message: `Enumeration literal '${literalName}' inside '${enumDefName}' is missing the 'enum' keyword prefix. Use 'enum ${literalName};' for portability.`,
+            severity: DiagnosticSeverity.Warning,
+            range,
+            elementName: literalName,
+            relatedInfo: [{
+                message: `The SysML v2 spec requires 'enum' before each enumeration literal`
+            }]
+        };
+    }
+
+    /**
+     * Create missing standard library import diagnostic.
+     * Suggests adding the appropriate import when standard types are used without one.
+     */
+    public static missingImport(
+        typeName: string,
+        suggestedImport: string,
+        range: vscode.Range
+    ): SemanticDiagnostic {
+        return {
+            code: 'missing-import',
+            message: `Type '${typeName}' is not in scope. Did you mean to add 'private import ${suggestedImport};'?`,
+            severity: DiagnosticSeverity.Warning,
+            range,
+            elementName: typeName,
+            relatedInfo: [{
+                message: `Add 'private import ${suggestedImport};' at the top of the file`
+            }]
+        };
+    }
+
+    /**
      * Create deprecated element warning
      */
     public static deprecatedElement(
