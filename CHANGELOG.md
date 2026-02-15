@@ -5,7 +5,21 @@ All notable changes to the SysML v2.0 Language Support extension will be documen
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.18.0]
+
+### Added
+
+- RC car sample model (`samples/rc-car.sysml`) — 540-line SysML v2 example with activity, sequence, and state machine diagrams
+
+### Fixed
+
+- MCP server registration: replaced broken `require('sysml-v2-lsp')` with direct path resolution — fixes "Tried to use SysML v2 tools but was blocked" in Copilot agent mode
+- Removed duplicate MCP server definitions from `.vscode/settings.json`, `.vscode/mcp.json`, and `samples/.vscode/` that caused two servers to appear in the debug host
+
+### Changed
+
+- Updated `sysml-v2-lsp` dependency from 0.1.4 to 0.1.5
+- MCP server now registered programmatically by the extension only (single `sysml-v2-mcp` provider)
 
 ## [0.17.0]
 
