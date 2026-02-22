@@ -28,6 +28,7 @@ module.exports = [
         exports: 'readonly',
         global: 'readonly',
         setTimeout: 'readonly',
+        clearTimeout: 'readonly',
         AbortSignal: 'readonly',
         AbortController: 'readonly',
         DOMException: 'readonly',
