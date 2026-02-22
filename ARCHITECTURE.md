@@ -2,7 +2,7 @@
 
 ## Overview
 
-A VS Code extension providing SysML v2.0 language support with interactive visualization. Language intelligence (diagnostics, completions, hover, go-to-definition, formatting, etc.) is provided by the **[sysml-v2-lsp](https://github.com/daltskin/sysml-v2-lsp)** language server via the Language Server Protocol. The extension adds visualization, model exploration, and diagram rendering on top.
+A VS Code extension providing SysML v2.0 language support with interactive visualization. All language intelligence (parsing, diagnostics, completions, hover, go-to-definition, formatting, etc.) is provided by the **[sysml-v2-lsp](https://github.com/daltskin/sysml-v2-lsp)** language server via the Language Server Protocol. The extension adds visualization, model exploration, and diagram rendering on top via a custom `sysml/model` LSP request.
 
 ## High-Level Architecture
 
@@ -22,28 +22,29 @@ A VS Code extension providing SysML v2.0 language support with interactive visua
 │         │                  │  (separate Node.js process)          │ │
 │         │                  │                                      │ │
 │         │                  │  * ANTLR4 parser (worker thread)     │ │
+│         │                  │  * Symbol table & model provider     │ │
 │         │                  │  * Diagnostics & keyword typos       │ │
 │         │                  │  * Completions / signature help      │ │
 │         │                  │  * Hover / go-to-def / references    │ │
-│         │                  │  * Semantic tokens / CodeLens        │ │
+│         │                  │  * Semantic tokens / CodeLens         │ │
 │         │                  │  * Rename / linked editing           │ │
 │         │                  │  * Inlay hints / document links      │ │
 │         │                  │  * Type & call hierarchy             │ │
 │         │                  │  * Formatting / folding / selection  │ │
 │         │                  │  * Workspace symbols                 │ │
+│         │                  │  * Standard library resolution       │ │
+│         │                  │  * Custom sysml/model request        │ │
 │         │                  └──────────────────────────────────────┘ │
 │         │                                                           │
-│         │  ┌──────────────┐   ┌──────────────────────────┐          │
-│         +->│    Parser    │-->│    Semantic Resolver     │          │
-│         │  │   (ANTLR4)   │   │  (visualization only)    │          │
-│         │  └──────┬───────┘   └──────────────────────────┘          │
-│         │         │                                                 │
-│         +---------+----------------------------+                    │
-│         v         v                            v                    │
-│  ┌────────────┐  ┌────────────┐         ┌────────────┐              │
-│  │ Model Tree │  │  Library   │         │ Webview    │              │
-│  │  Explorer  │  │  Service   │         │ Visualizer │              │
-│  └────────────┘  └────────────┘         └────────────┘              │
+│         │                                                           │
+│  ┌──────┴──────────────────────────────────────────────────────┐    │
+│  │                    Extension Features                       │    │
+│  │                                                             │    │
+│  │  ┌────────────┐  ┌───────────────┐  ┌────────────────────┐ │    │
+│  │  │ Model Tree │  │  LSP Model    │  │  Model Dashboard   │ │    │
+│  │  │  Explorer  │  │  Provider     │  │     Panel          │ │    │
+│  │  └────────────┘  └───────────────┘  └────────────────────┘ │    │
+│  └─────────────────────────────────────────────────────────────┘    │
 │                                                                     │
 │  ┌────────────────────────────────────────────────────────────────┐ │
 │  │                 Visualization Panel (Webview)                  │ │
@@ -62,32 +63,30 @@ A VS Code extension providing SysML v2.0 language support with interactive visua
 - Starts the **sysml-v2-lsp** language server as a child process (IPC transport)
 - The server module is shipped as the `sysml-v2-lsp` npm dependency
 - Provides all language intelligence: diagnostics, completions, hover, go-to-definition, references, rename, formatting, code actions, semantic tokens, CodeLens, inlay hints, type/call hierarchy, document symbols, folding ranges, selection ranges, workspace symbols
+- Custom `sysml/model` request returns parsed model data for visualization and explorer
 - Supports `sysml.restartServer` command for development
 
-### 2. Parser (`src/parser/`) — Visualization & Explorer only
+### 2. LSP Model Provider (`src/providers/`)
 
-- **ANTLR4-based** parser generated from `grammar/SysMLv2Parser.g4`
-- Parses `.sysml` and `.kerml` files into AST
-- Used **only** for the Model Explorer tree view and Visualization panel
-- Language features (diagnostics, navigation, etc.) are handled by the LSP server
-- Caches parse results by content hash for performance
+- `lspModelProvider.ts` — sends `sysml/model` requests to the LSP server
+- `sysmlModelTypes.ts` — shared type definitions for model data (elements, relationships, stats)
+- Converts LSP model responses into visualization-ready data structures
 
-### 2. Semantic Resolver (`src/resolver/`)
+### 3. Model Explorer (`src/explorer/`)
 
-- Validates types against SysML standard library
-- Resolves references (part types, specializations)
-- Produces enriched elements with resolved type info
-- Generates semantic diagnostics
+- `modelExplorerProvider.ts` — tree view showing SysML model structure
+- Displays packages, parts, attributes, ports, connections, etc.
+- Uses `sysml/model` request with `['elements', 'relationships']` scope
+- Supports refresh, navigation to source, and model dashboard
 
-### 3. Library Service (`src/library/`)
+### 4. Model Dashboard (`src/panels/`)
 
-- Indexes the SysML v2 standard library (`sysml.library/`)
-- Provides symbol lookup for type resolution
-- Caches index to `.sysml-cache/library.json`
+- `modelDashboardPanel.ts` — webview panel showing model statistics
+- Displays element counts, relationship types, parse timing, and model structure overview
 
-### 4. Visualization (`src/visualization/`)
+### 5. Visualization (`src/visualization/`)
 
-- Webview-based diagram rendering
+- `visualizationPanel.ts` — webview-based diagram rendering
 - Multiple renderers: BDD, IBD, Package, Activity, Sequence, State, UseCase
 - Uses **Cytoscape.js** + **ELK** for graph layout
 - Uses **D3.js** for custom diagrams
@@ -95,26 +94,24 @@ A VS Code extension providing SysML v2.0 language support with interactive visua
 ## Data Flow
 
 ```
- .sysml File                                            Webview
-      │                                                    ^
-      v                                                    │
-┌───────────┐    ┌───────────┐    ┌───────────┐    ┌───────┴───────┐
-│  TextDoc  │--->│   ANTLR   │--->│   SysML   │--->│   Renderer    │
-│           │    │  Lexer/   │    │  Elements │    │(view-specific)│
-│           │    │  Parser   │    │   (AST)   │    │               │
-└───────────┘    └───────────┘    └─────┬─────┘    └───────────────┘
-                                        │
-                                        v
-                                  ┌───────────┐    ┌─────────────┐
-                                  │ Semantic  │--->│  Enriched   │
-                                  │ Resolver  │    │  Elements   │
-                                  └─────┬─────┘    └─────────────┘
-                                        │
-                                        v
-                                  ┌───────────┐
-                                  │  Library  │
-                                  │  Service  │
-                                  └───────────┘
+ .sysml File
+      │
+      v
+┌───────────┐    ┌──────────────────────────┐    ┌───────────────┐
+│  TextDoc  │--->│   sysml-v2-lsp Server    │--->│ LSP Responses │
+│           │    │                          │    │               │
+│           │    │  ANTLR4 parse (worker)   │    │ diagnostics,  │
+│           │    │  Symbol table build      │    │ completions,  │
+│           │    │  Library resolution      │    │ model data    │
+└───────────┘    └──────────────────────────┘    └───────┬───────┘
+                                                         │
+                         ┌───────────────────────────────┤
+                         │                               │
+                         v                               v
+                  ┌─────────────┐              ┌───────────────┐
+                  │ Model Tree  │              │  Visualization │
+                  │  Explorer   │              │    Webview     │
+                  └─────────────┘              └───────────────┘
 ```
 
 ## Key Dependencies
@@ -123,7 +120,6 @@ A VS Code extension providing SysML v2.0 language support with interactive visua
 | ----------------------- | --------------------------------- |
 | `sysml-v2-lsp`          | Language server (LSP)             |
 | `vscode-languageclient` | VS Code LSP client library        |
-| `antlr4`                | TypeScript ANTLR4 runtime (viz)   |
 | `elkjs`                 | ELK graph layout algorithm        |
 | `cytoscape`             | Graph visualization library       |
 | `cytoscape-elk`         | ELK layout adapter for Cytoscape  |
@@ -135,36 +131,29 @@ A VS Code extension providing SysML v2.0 language support with interactive visua
 src/
 ├── extension.ts          # Entry point, command registration
 ├── lsp/
-│   └── client.ts         # LSP client (starts sysml-v2-lsp server)
-├── parser/
-│   ├── sysmlParser.ts    # High-level parser API (visualization only)
-│   ├── antlrSysMLParser.ts # ANTLR wrapper
-│   └── generated/        # ANTLR-generated lexer/parser
-├── resolver/
-│   ├── resolver.ts       # Type resolution logic (visualization)
-│   └── diagnostics.ts    # Diagnostic message factory (visualization)
-├── library/
-│   ├── service.ts        # Library indexing & lookup
-│   └── cacheManager.ts   # Index persistence
+│   ├── client.ts         # LSP client (starts sysml-v2-lsp server)
+│   └── server-launcher.cjs # Server process entry point
+├── providers/
+│   ├── lspModelProvider.ts  # sysml/model request handler
+│   └── sysmlModelTypes.ts   # Shared model type definitions
 ├── visualization/
-│   ├── visualizationPanel.ts  # Webview host
-│   └── renderers/             # View-specific renderers
+│   └── visualizationPanel.ts  # Webview host & diagram rendering
 ├── explorer/
-│   └── modelExplorerProvider.ts # Tree view
+│   └── modelExplorerProvider.ts # Tree view provider
+├── panels/
+│   └── modelDashboardPanel.ts   # Dashboard webview panel
 ├── types/
-│   └── sysml-v2-lsp.d.ts # Type declarations for LSP package
-├── validation/           # Retained for reference (LSP handles validation)
-├── navigation/           # Retained for reference (LSP handles navigation)
-└── formatting/           # Retained for reference (LSP handles formatting)
+│   └── sysml-v2-lsp.d.ts       # Type declarations for LSP package
+└── test/
+    └── *.test.ts                # Unit and integration tests
 ```
 
 ## Extension Activation
 
 1. Triggered by `onLanguage:sysml` or command invocation
 2. Starts the **sysml-v2-lsp** language server via IPC (handles all language features)
-3. Creates `SysMLParser`, `ModelExplorerProvider` (for visualization only)
-4. Registers visualization, export, and model explorer commands
-5. Sets up file watchers and document change handlers (for model explorer updates)
+3. Registers Model Explorer tree view, visualization commands, and dashboard
+4. Sets up file watchers and document change handlers for model updates
 
 ## Webview Communication
 

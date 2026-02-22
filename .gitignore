@@ -56,15 +56,10 @@ Thumbs.db
 *.tmp
 *.temp
 
-# Official SysML v2 Library (downloaded at build time)
-sysml.library/
+docs/
 
-docs
-
-# Grammar generation
-.grammar-cache/
-tools/*.jar
-__pycache__/
+# Cache files
+.sysml-cache/
 
 # Test output
 test-output/

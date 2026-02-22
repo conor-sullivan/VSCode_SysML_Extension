@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
-import { SysMLElement, SysMLParser } from '../parser/sysmlParser';
+import { LspModelProvider, toVscodeRange } from '../providers/lspModelProvider';
+import type { SysMLElementDTO } from '../providers/sysmlModelTypes';
+import type { SysMLElement } from '../types/sysmlTypes';
 
 export class VisualizationPanel {
     public static currentPanel: VisualizationPanel | undefined;
@@ -12,23 +14,37 @@ export class VisualizationPanel {
     private _lastContentHash: string = ''; // Cache content hash to skip unchanged updates
     private _pendingUpdate: ReturnType<typeof setTimeout> | undefined; // Coalesce rapid updates
     private _needsUpdateWhenVisible: boolean = false; // Deferred update when panel is hidden
+    private _lastViewColumn: vscode.ViewColumn | undefined; // Track view column to detect panel moves
+    private _fileUris: vscode.Uri[] = []; // All source file URIs (for folder-level visualization)
 
     private constructor(
         panel: vscode.WebviewPanel,
         extensionUri: vscode.Uri,
 
-        private _parser: SysMLParser,
+        private _document: vscode.TextDocument,
 
-        private _document: vscode.TextDocument
+        private _lspModelProvider: LspModelProvider,
+        fileUris?: vscode.Uri[],
     ) {
+        this._fileUris = fileUris ?? [];
         this._panel = panel;
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
-        // When the panel becomes visible again, flush any deferred update
+        this._lastViewColumn = panel.viewColumn;
+
+        // When the panel becomes visible again or is moved (e.g. dragged to
+        // a floating window), force a re-render so the visualizer recovers.
         this._panel.onDidChangeViewState(() => {
-            if (this._panel.visible && this._needsUpdateWhenVisible) {
-                this._needsUpdateWhenVisible = false;
-                this.updateVisualization(true);
+            const columnChanged = this._panel.viewColumn !== this._lastViewColumn;
+            this._lastViewColumn = this._panel.viewColumn;
+
+            if (this._panel.visible) {
+                if (this._needsUpdateWhenVisible || columnChanged) {
+                    this._needsUpdateWhenVisible = false;
+                    // Reset content hash so the update is not skipped
+                    this._lastContentHash = '';
+                    this.updateVisualization(true);
+                }
             }
         }, null, this._disposables);
 
@@ -71,6 +87,11 @@ export class VisualizationPanel {
                         // Update our stored view state with the current webview state
                         this._currentView = message.view;
                         break;
+                    case 'webviewReady':
+                        // Webview (re)initialized — push current model data
+                        this._lastContentHash = '';
+                        this.updateVisualization(true);
+                        break;
                 }
             },
             null,
@@ -80,7 +101,7 @@ export class VisualizationPanel {
         this.updateVisualization();
     }
 
-    public static createOrShow(extensionUri: vscode.Uri, parser: SysMLParser, document: vscode.TextDocument, customTitle?: string) {
+    public static createOrShow(extensionUri: vscode.Uri, document: vscode.TextDocument, customTitle?: string, lspModelProvider?: LspModelProvider, fileUris?: vscode.Uri[]): void {
         // Determine the best column layout for side-by-side viewing
         const activeColumn = vscode.window.activeTextEditor?.viewColumn;
         let visualizerColumn: vscode.ViewColumn;
@@ -100,12 +121,29 @@ export class VisualizationPanel {
             // If panel exists, update title and reveal it
             VisualizationPanel.currentPanel._panel.title = title;
             VisualizationPanel.currentPanel._panel.reveal(visualizerColumn);
-            // Only update if the document has actually changed
-            if (VisualizationPanel.currentPanel._document !== document) {
+            if (lspModelProvider) {
+                VisualizationPanel.currentPanel._lspModelProvider = lspModelProvider;
+            }
+            // Track whether file URIs changed (folder→folder or file→folder)
+            let fileUrisChanged = false;
+            if (fileUris) {
+                const oldSet = new Set(VisualizationPanel.currentPanel._fileUris.map(u => u.toString()));
+                const newSet = new Set(fileUris.map(u => u.toString()));
+                fileUrisChanged = oldSet.size !== newSet.size
+                    || [...newSet].some(u => !oldSet.has(u));
+                VisualizationPanel.currentPanel._fileUris = fileUris;
+            }
+            // Update if the document changed OR the set of file URIs changed
+            if (VisualizationPanel.currentPanel._document !== document || fileUrisChanged) {
                 VisualizationPanel.currentPanel._document = document;
-                VisualizationPanel.currentPanel.updateVisualization();
+                VisualizationPanel.currentPanel._lastContentHash = ''; // force re-parse
+                VisualizationPanel.currentPanel.updateVisualization(true);
             }
             return;
+        }
+
+        if (!lspModelProvider) {
+            return;  // Cannot create panel without an LSP model provider
         }
 
         const panel = vscode.window.createWebviewPanel(
@@ -122,7 +160,7 @@ export class VisualizationPanel {
             }
         );
 
-        VisualizationPanel.currentPanel = new VisualizationPanel(panel, extensionUri, parser, document);
+        VisualizationPanel.currentPanel = new VisualizationPanel(panel, extensionUri, document, lspModelProvider, fileUris);
     }
 
     public exportVisualization(format: string, scale: number = 2) {
@@ -172,98 +210,93 @@ export class VisualizationPanel {
         await this._doUpdateVisualization();
     }
 
-    private _doUpdateVisualization() {
-        // Use fast parse for visualization - skip semantic resolution for speed
-        // Semantic resolution is expensive and not needed for diagram rendering
-        const elements = this._parser.parse(this._document);
+    private async _doUpdateVisualization() {
+        try {
+            // Determine which URIs to query: if we have multiple source
+            // file URIs (folder-level visualization) query each of them;
+            // otherwise fall back to the single document URI.
+            const urisToQuery = this._fileUris.length > 0
+                ? this._fileUris.map(u => u.toString())
+                : [this._document.uri.toString()];
 
-        const relationships = this._parser.getRelationships();
-        const sequenceDiagrams = this._parser.getSequenceDiagrams();
+            const scopes: ('elements' | 'relationships' | 'sequenceDiagrams' | 'activityDiagrams')[] =
+                ['elements', 'relationships', 'sequenceDiagrams', 'activityDiagrams'];
 
-        // Get activity diagrams from parser
-        const activityDiagrams = this._parser.getActivityDiagrams(this._document);
+            // Fetch models for all URIs in parallel
+            const results = await Promise.all(
+                urisToQuery.map(uri => this._lspModelProvider.getModel(uri, scopes)),
+            );
 
-        const jsonElements = this.convertElementsToJSON(elements);
+            // Merge results from all files
+            const allElements: SysMLElementDTO[] = [];
+            const allRelationships: unknown[] = [];
+            const allSequenceDiagrams: unknown[] = [];
+            const allActivityDiagrams: unknown[] = [];
 
-        // CRITICAL: Remove circular references before JSON serialization
-        // The collectAllElements function may have added parentElement object references
-        // which create circular structures that break JSON.stringify()
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        function cleanCircularRefs(obj: any): any {
-            if (!obj || typeof obj !== 'object') return obj;
-
-            // Remove parentElement property that creates circular references
-            if (obj.parentElement) {
-                delete obj.parentElement;
+            for (const result of results) {
+                if (result.elements) { allElements.push(...result.elements); }
+                if (result.relationships) { allRelationships.push(...(result.relationships as unknown[])); }
+                if (result.sequenceDiagrams) { allSequenceDiagrams.push(...(result.sequenceDiagrams as unknown[])); }
+                if (result.activityDiagrams) { allActivityDiagrams.push(...(result.activityDiagrams as unknown[])); }
             }
 
-            // Recursively clean arrays
-            if (Array.isArray(obj)) {
-                obj.forEach(item => cleanCircularRefs(item));
-            } else {
-                // Recursively clean object properties
-                Object.keys(obj).forEach(key => {
-                    if (typeof obj[key] === 'object' && obj[key] !== null) {
-                        cleanCircularRefs(obj[key]);
-                    }
-                });
-            }
+            // DTOs are already plain JSON — convert elements to the
+            // shape the webview expects (add id / properties / typing).
+            const jsonElements = this.convertDTOElementsToJSON(allElements);
 
-            return obj;
-        }
-
-        // Clean all data structures before sending to webview
-        cleanCircularRefs(jsonElements);
-        cleanCircularRefs(relationships);
-        cleanCircularRefs(sequenceDiagrams);
-        cleanCircularRefs(activityDiagrams);
-
-        this._panel.webview.postMessage({
-            command: 'update',
-            elements: jsonElements,
-            relationships: relationships,
-            sequenceDiagrams: sequenceDiagrams,
-            activityDiagrams: activityDiagrams,
-            currentView: this._currentView // Send the stored view state
-        });
+            this._panel.webview.postMessage({
+                command: 'update',
+                elements: jsonElements,
+                relationships: allRelationships,
+                sequenceDiagrams: allSequenceDiagrams,
+                activityDiagrams: allActivityDiagrams,
+                currentView: this._currentView,
+            });
+        } catch { /* LSP model request failed — silently ignore */ }
     }
 
-    private convertElementsToJSON(elements: SysMLElement[]): Array<{
-        name: string;
-        type: string;
-        attributes: Record<string, string | number | boolean>;
-        children: Array<{name: string; type: string; attributes: Record<string, string | number | boolean>; children: unknown; relationships: import('../parser/sysmlParser').Relationship[]}>;
-        relationships: import('../parser/sysmlParser').Relationship[];
-    }> {
-        return elements.map(element => {
-            const attributes: Record<string, string | number | boolean> = {};
-            if (element.attributes) {
-                element.attributes.forEach((value, key) => {
-                    attributes[key] = value;
-                });
-            }
+    /**
+     * Convert LSP DTO elements into the JSON shape the webview expects.
+     * DTOs already use Record attributes (no Map → Record conversion needed)
+     * and have no circular parentElement references.
+     *
+     * `typing` is derived from the DTO's `attributes` (partType / portType)
+     * or from a `typing` relationship — matching the ANTLR parser's
+     * `(element as any).typing` property that the webview views rely on.
+     */
+    private convertDTOElementsToJSON(elements: SysMLElementDTO[], parentName?: string): unknown[] {
+        // Filter out self-referencing package children: the LSP server
+        // sometimes includes the root package as its own child.
+        const filtered = parentName
+            ? elements.filter(el => !(el.type === 'package' && el.name === parentName))
+            : elements;
 
-            // Sanitize relationships to remove circular references
-            // Only keep the essential string properties, not object references
-            const sanitizedRelationships = (element.relationships || []).map(rel => ({
-                type: rel.type,
-                source: rel.source,
-                target: rel.target,
-                // Don't include sourceElement or targetElement which might be object references
-            }));
+        return filtered.map(el => {
+            const attrs = el.attributes ?? {};
+            const rels = el.relationships ?? [];
+
+            // Resolve typing the same way the ANTLR parser does:
+            //   1. partType / portType attribute (set by the LSP server)
+            //   2. First 'typing' relationship target
+            const typing: string | undefined =
+                (attrs['partType'] as string | undefined) ??
+                (attrs['portType'] as string | undefined) ??
+                rels.find(r => r.type === 'typing')?.target ??
+                undefined;
 
             return {
-                name: element.name,
-                type: element.type,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                id: (element as any).id || element.name,
-                attributes,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                properties: (element as any).properties || {},
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                typing: (element as any).typing,
-                children: this.convertElementsToJSON(element.children),
-                relationships: sanitizedRelationships
+                name: el.name,
+                type: el.type,
+                id: el.name,
+                attributes: attrs,
+                properties: {},
+                typing,
+                children: this.convertDTOElementsToJSON(el.children ?? [], el.name),
+                relationships: rels.map(r => ({
+                    type: r.type,
+                    source: r.source,
+                    target: r.target,
+                })),
             };
         });
     }
@@ -303,24 +336,22 @@ export class VisualizationPanel {
 
         let element: SysMLElement | undefined;
 
-        // If parent context is provided, search within that parent first
-        if (parentContext) {
-            const resolutionResult = await this._parser.parseWithSemanticResolution(this._document);
-            const allElements = this._parser.convertEnrichedToSysMLElements(resolutionResult.elements);
-            element = this.findElementInParent(elementName, parentContext, allElements);
-        }
-
-        // Fall back to regular search if not found in parent context
-        if (!element) {
-            element = this._parser.findElement(elementName);
-        }
-
-        // If still not found, try searching recursively through the tree
-        if (!element) {
-            // Parse document to get all elements for recursive search
-            const resolutionResult = await this._parser.parseWithSemanticResolution(this._document);
-            const allElements = this._parser.convertEnrichedToSysMLElements(resolutionResult.elements);
-            element = this.findElementRecursive(elementName, allElements);
+        const dto = await this._lspModelProvider.findElement(
+            this._document.uri.toString(),
+            elementName,
+            parentContext,
+        );
+        if (dto) {
+            // Wrap DTO in a minimal SysMLElement-compatible shape for
+            // the navigation code below (only range is needed).
+            element = {
+                type: dto.type,
+                name: dto.name,
+                range: toVscodeRange(dto.range),
+                children: [],
+                attributes: new Map(),
+                relationships: [],
+            };
         }
 
         if (element) {
@@ -423,14 +454,21 @@ export class VisualizationPanel {
             return;
         }
 
-        // Find the element to rename
-        let element = this._parser.findElement(oldName);
-
-        if (!element) {
-            // Try recursive search
-            const resolutionResult = await this._parser.parseWithSemanticResolution(this._document);
-            const allElements = this._parser.convertEnrichedToSysMLElements(resolutionResult.elements);
-            element = this.findElementRecursive(oldName, allElements);
+        // Find the element to rename via LSP
+        let element: SysMLElement | undefined;
+        const dto = await this._lspModelProvider.findElement(
+            this._document.uri.toString(),
+            oldName,
+        );
+        if (dto) {
+            element = {
+                type: dto.type,
+                name: dto.name,
+                range: toVscodeRange(dto.range),
+                children: [],
+                attributes: new Map(),
+                relationships: [],
+            };
         }
 
         if (!element || !element.range) {
@@ -542,6 +580,11 @@ export class VisualizationPanel {
         return this._document;
     }
 
+    /** Update the LspModelProvider. */
+    public setLspModelProvider(provider: LspModelProvider): void {
+        this._lspModelProvider = provider;
+    }
+
     public changeView(viewId: string): void {
         this._panel.webview.postMessage({
             command: 'changeView',
@@ -551,9 +594,25 @@ export class VisualizationPanel {
     }
 
     public notifyFileChanged(uri: vscode.Uri) {
-        // Instant update - content hash check in updateVisualization prevents redundant work
-        if (this._document.uri.toString() === uri.toString()) {
-            this.updateVisualization();
+        // Always force — the LSP server parses asynchronously, so the
+        // model data may have changed even when the document text hasn't
+        // (e.g. after a sysml/status 'end' notification).
+        const uriStr = uri.toString();
+        const docUri = this._document.uri.toString();
+        const isTracked = docUri === uriStr
+            || this._fileUris.some(u => u.toString() === uriStr);
+
+        if (isTracked) {
+            // Debounce: coalesce multiple notifications from
+            // onDidChangeTextDocument, onDidSaveTextDocument, and the
+            // file-system watcher into a single visualizer refresh.
+            if (this._fileChangeDebounceTimer) {
+                clearTimeout(this._fileChangeDebounceTimer);
+            }
+            this._fileChangeDebounceTimer = setTimeout(() => {
+                this._fileChangeDebounceTimer = undefined;
+                this.updateVisualization(true);
+            }, 400);
         }
     }
 
@@ -2117,15 +2176,98 @@ export class VisualizationPanel {
                                 const allActions = [
                                     ...(diagram.actions || []).map(a => ({
                                         ...a,
-                                        id: a.id || a.name
+                                        id: a.id || a.name,
+                                        // Direct children of the diagram root are
+                                        // top-level — clear parent so the renderer
+                                        // does not filter them out.
+                                        parent: (a.parent === diagram.name) ? undefined : a.parent
                                     })),
                                     ...decisionsAsActions
                                 ];
 
+                                // Build a set of known action IDs
+                                const actionIds = new Set(allActions.map(a => a.id || a.name));
+
+                                // Synthesize missing control nodes from flows
+                                // This handles the case where LSP returns flows referencing
+                                // merge/fork/join nodes that aren't in the actions list
+                                const flows = diagram.flows || [];
+                                const flowNodeNames = new Set();
+                                const incomingFlowCount = new Map();
+                                const outgoingFlowCount = new Map();
+
+                                flows.forEach(f => {
+                                    if (f.from) {
+                                        flowNodeNames.add(f.from);
+                                        outgoingFlowCount.set(f.from, (outgoingFlowCount.get(f.from) || 0) + 1);
+                                    }
+                                    if (f.to) {
+                                        flowNodeNames.add(f.to);
+                                        incomingFlowCount.set(f.to, (incomingFlowCount.get(f.to) || 0) + 1);
+                                    }
+                                });
+
+                                // Add synthesized control nodes for any flow endpoints not in actions
+                                flowNodeNames.forEach(nodeName => {
+                                    if (!actionIds.has(nodeName)) {
+                                        // Determine node type from flow patterns:
+                                        // - Multiple incoming flows → merge node
+                                        // - Multiple outgoing flows → fork or decision
+                                        // - Name hints (merge, fork, join, decision, check)
+                                        const incoming = incomingFlowCount.get(nodeName) || 0;
+                                        const outgoing = outgoingFlowCount.get(nodeName) || 0;
+                                        const nameLower = nodeName.toLowerCase();
+
+                                        let nodeType = 'action';
+                                        let nodeKind = 'action';
+
+                                        if (nameLower.includes('merge') || nameLower.includes('join') || nameLower.endsWith('check')) {
+                                            nodeType = 'merge';
+                                            nodeKind = 'merge';
+                                        } else if (nameLower.includes('fork')) {
+                                            nodeType = 'fork';
+                                            nodeKind = 'fork';
+                                        } else if (nameLower.includes('decision') || nameLower.includes('decide')) {
+                                            nodeType = 'decision';
+                                            nodeKind = 'decision';
+                                        } else if (incoming > 1) {
+                                            // Multiple incoming flows → likely a merge/join
+                                            nodeType = 'merge';
+                                            nodeKind = 'merge';
+                                        } else if (outgoing > 1) {
+                                            // Multiple outgoing flows → fork (or decision if guards present)
+                                            const hasGuards = flows.some(f => f.from === nodeName && (f.guard || f.condition));
+                                            if (hasGuards) {
+                                                nodeType = 'decision';
+                                                nodeKind = 'decision';
+                                            } else {
+                                                nodeType = 'fork';
+                                                nodeKind = 'fork';
+                                            }
+                                        }
+
+                                        allActions.push({
+                                            name: nodeName,
+                                            id: nodeName,
+                                            type: nodeType,
+                                            kind: nodeKind
+                                        });
+                                        actionIds.add(nodeName);
+                                    }
+                                });
+
+                                // Defensive: filter out self-referencing flows
+                                // and flows pointing to non-existent actions.
+                                const cleanFlows = flows.filter(f =>
+                                    f.from !== f.to &&
+                                    actionIds.has(f.from) &&
+                                    actionIds.has(f.to)
+                                );
+
                                 return {
                                     name: diagram.name,
                                     actions: allActions,
-                                    flows: diagram.flows || [],
+                                    flows: cleanFlows,
                                     decisions: diagram.decisions || [],
                                     states: diagram.states || []
                                 };
@@ -2199,9 +2341,150 @@ export class VisualizationPanel {
 
                 case 'sequence':
                     // Sequence Diagram View needs sequence diagrams
+                    if (data.sequenceDiagrams && data.sequenceDiagrams.length > 0) {
+                        return {
+                            ...data,
+                            sequenceDiagrams: data.sequenceDiagrams
+                        };
+                    }
+
+                    // Fallback: synthesise sequence diagrams from elements.
+                    // Two strategies:
+                    //  1. Elements whose names suggest sequential behaviour
+                    //     (sequence, interaction, workflow, scenario, process)
+                    //     that have part children as participants.
+                    //  2. Action defs/usages with child actions (sequential
+                    //     flow) — mirrors the ANTLR parser's
+                    //     isSequentialBehaviorElement / extractActionSequence.
+
+                    // Strategy 1: name/type-based candidates with part children
+                    const seqCandidates = allElements.filter(el => {
+                        if (!el.type || !el.children || el.children.length === 0) return false;
+                        const nameLower = (el.name || '').toLowerCase();
+                        const typeLower = el.type.toLowerCase();
+                        const hasSequenceName = /sequence|interaction|workflow|scenario|process/.test(nameLower);
+                        const isInteraction = typeLower.includes('interaction');
+                        if (!hasSequenceName && !isInteraction) return false;
+                        const hasParts = el.children.some(c => c.type && c.type.toLowerCase().includes('part'));
+                        return hasParts;
+                    });
+
+                    // Strategy 2: action defs/usages that contain child actions
+                    // (sequential behaviour — first/then/done flow)
+                    const actionSeqCandidates = allElements.filter(el => {
+                        if (!el.type || !el.children || el.children.length === 0) return false;
+                        const typeLower = el.type.toLowerCase();
+                        const isAction = typeLower === 'action def' || typeLower === 'action definition'
+                            || typeLower === 'action' || typeLower === 'action usage';
+                        if (!isAction) return false;
+                        // Must have at least one child action (sequential steps)
+                        const hasChildActions = el.children.some(c => {
+                            if (!c.type) return false;
+                            const ct = c.type.toLowerCase();
+                            return ct === 'action' || ct === 'action usage' || ct === 'action def';
+                        });
+                        return hasChildActions;
+                    });
+
+                    // Helper: collect participants from an element's children
+                    // (actors, parts, items, ports)
+                    function collectParticipants(el) {
+                        const parts = [];
+                        function walk(children) {
+                            for (const c of children) {
+                                if (!c.type) continue;
+                                const t = c.type.toLowerCase();
+                                if (t === 'actor' || t === 'actor usage' || t === 'actor def') {
+                                    if (!parts.find(p => p.name === c.name)) {
+                                        parts.push({ name: c.name, type: 'actor' });
+                                    }
+                                } else if (t === 'part' || t === 'part usage' || t === 'part def'
+                                    || t === 'item' || t === 'item usage' || t === 'item def') {
+                                    if (!parts.find(p => p.name === c.name)) {
+                                        parts.push({ name: c.name, type: c.typing || 'component' });
+                                    }
+                                } else if (t === 'port' || t === 'port usage') {
+                                    if (!parts.find(p => p.name === c.name)) {
+                                        parts.push({ name: c.name, type: 'port' });
+                                    }
+                                }
+                                if (c.children && c.children.length > 0) walk(c.children);
+                            }
+                        }
+                        walk(el.children || []);
+                        // Fallback: if no participants found, add a generic 'system'
+                        if (parts.length === 0) {
+                            parts.push({ name: 'system', type: 'system' });
+                        }
+                        return parts;
+                    }
+
+                    // Helper: build messages from child actions
+                    function buildMessages(el, participants) {
+                        const msgs = [];
+                        let occ = 1;
+                        function walk(children) {
+                            for (const c of children) {
+                                if (!c.type) continue;
+                                const t = c.type.toLowerCase();
+                                if (t === 'action' || t === 'action usage' || t === 'action def') {
+                                    // Infer from/to using participant name matching (like ANTLR parser)
+                                    const cName = (c.name || '').toLowerCase();
+                                    let from = participants[0]?.name || 'system';
+                                    let to = participants.length > 1 ? participants[1].name : (participants[0]?.name || 'system');
+
+                                    // Try matching action name to participant names
+                                    for (const p of participants) {
+                                        const pLower = p.name.toLowerCase();
+                                        if (cName.includes(pLower) || pLower.includes(cName)) {
+                                            to = p.name;
+                                            break;
+                                        }
+                                    }
+                                    // Prefer actor as 'from' if available
+                                    const actorP = participants.find(p => p.type === 'actor');
+                                    if (actorP) from = actorP.name;
+
+                                    msgs.push({
+                                        name: c.name,
+                                        from,
+                                        to,
+                                        payload: c.name,
+                                        occurrence: occ++
+                                    });
+                                    // Recurse into nested action children
+                                    if (c.children && c.children.length > 0) walk(c.children);
+                                }
+                            }
+                        }
+                        walk(el.children || []);
+                        return msgs;
+                    }
+
+                    // Merge both strategies (deduplicate by name)
+                    const allCandidatesMap = new Map();
+                    for (const c of seqCandidates) allCandidatesMap.set(c.name, c);
+                    for (const c of actionSeqCandidates) {
+                        if (!allCandidatesMap.has(c.name)) allCandidatesMap.set(c.name, c);
+                    }
+                    const allSeqCandidates = Array.from(allCandidatesMap.values());
+
+                    if (allSeqCandidates.length > 0) {
+                        const synthesisedDiagrams = allSeqCandidates.map(candidate => {
+                            const participants = collectParticipants(candidate);
+                            const messages = buildMessages(candidate, participants);
+                            return { name: candidate.name, participants, messages };
+                        });
+
+                        return {
+                            ...data,
+                            sequenceDiagrams: synthesisedDiagrams
+                        };
+                    }
+
                     return {
                         ...data,
-                        sequenceDiagrams: data.sequenceDiagrams || []
+                        sequenceDiagrams: []
                     };
 
                 case 'usecase':
@@ -2227,11 +2510,15 @@ export class VisualizationPanel {
                     const actors = Array.from(actorsByName.values());
 
                     // Filter use cases - prefer definitions over usages to avoid duplicates
-                    const allUseCases = allElements.filter(el => el.type && (
-                        el.type.includes('use case') ||
-                        el.type.includes('usecase') ||
-                        el.type.includes('UseCase')
-                    ));
+                    // Exclude 'include use case' usages — those represent <<include>> relationships
+                    const allUseCases = allElements.filter(el => {
+                        if (!el.type) return false;
+                        const typeLower = el.type.toLowerCase();
+                        if (typeLower === 'include use case') return false;
+                        return typeLower.includes('use case') ||
+                            typeLower.includes('usecase') ||
+                            typeLower.includes('UseCase');
+                    });
 
                     // Group use cases by name (case-insensitive) and prefer definitions
                     const useCasesByName = new Map();
@@ -2303,6 +2590,19 @@ export class VisualizationPanel {
                                         target: useCase.name,
                                         type: 'association',
                                         label: objectiveText
+                                    });
+                                }
+
+                                // Handle 'include use case' children — generate <<include>> relationships
+                                const isIncludeUseCase = childType === 'include use case';
+                                if (isIncludeUseCase) {
+                                    // The typing/specialization gives us the included use case
+                                    const includedUC = child.typing || child.name;
+                                    useCaseRelationships.push({
+                                        source: useCase.name,
+                                        target: includedUC,
+                                        type: 'include',
+                                        label: ''
                                     });
                                 }
                             });
@@ -2438,10 +2738,11 @@ export class VisualizationPanel {
 
                     // Also add the actor usages to the actors list if they reference undefined actors
                     // This ensures we show all actors even if they're only defined as usages
+                    // LSP server emits actors with kind 'actor'; ANTLR uses 'actor usage'
                     const actorUsages = allElements.filter(el => {
                         if (!el.type) return false;
                         const typeLower = el.type.toLowerCase();
-                        return typeLower === 'actor usage';
+                        return typeLower === 'actor usage' || typeLower === 'actor';
                     });
 
                     // Add unique actor usages that don't have matching definitions
@@ -13114,6 +13415,11 @@ export class VisualizationPanel {
                 }
             });
         });
+
+        // Signal to the extension host that the webview is (re)initialized
+        // so it can push the current model data (e.g. after being dragged
+        // to a floating window which may recreate the iframe).
+        vscode.postMessage({ command: 'webviewReady' });
     </script>
 </body>
 </html>`;
