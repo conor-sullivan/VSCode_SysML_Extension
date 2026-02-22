@@ -1,5 +1,35 @@
 import * as vscode from 'vscode';
-import { Relationship, SysMLElement, SysMLParser } from '../parser/sysmlParser';
+import { LspModelProvider, toVscodeRange } from '../providers/lspModelProvider';
+import type { SysMLElementDTO } from '../providers/sysmlModelTypes';
+import type { Relationship, SysMLElement } from '../types/sysmlTypes';
+
+/**
+ * Convert an `SysMLElementDTO` (plain objects, Record attributes) into a
+ * `SysMLElement` (vscode.Range, Map attributes) so the tree-item code
+ * can work identically regardless of source.
+ */
+function dtoToSysMLElement(dto: SysMLElementDTO): SysMLElement {
+    const attrs = new Map<string, string | number | boolean>();
+    if (dto.attributes) {
+        for (const [k, v] of Object.entries(dto.attributes)) {
+            attrs.set(k, v);
+        }
+    }
+    return {
+        type: dto.type,
+        name: dto.name,
+        range: toVscodeRange(dto.range),
+        children: (dto.children ?? []).map(dtoToSysMLElement),
+        attributes: attrs,
+        relationships: (dto.relationships ?? []).map(r => ({
+            type: r.type,
+            source: r.source,
+            target: r.target,
+            name: r.name,
+        })),
+        errors: dto.errors,
+    };
+}
 
 export class ModelExplorerProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     private _onDidChangeTreeData: vscode.EventEmitter<vscode.TreeItem | undefined | null | void> = new vscode.EventEmitter<vscode.TreeItem | undefined | null | void>();
@@ -10,8 +40,15 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<vscode.Tre
     private rootElements: SysMLElement[] = [];
     private isLoading: boolean = false;
 
+    /** Stats from the most recent LSP `sysml/model` response. */
+    private _lastStats: { totalElements: number; resolvedElements: number; unresolvedElements: number; parseTimeMs: number; modelBuildTimeMs: number } | undefined;
 
-    constructor(private _parser: SysMLParser) {}
+    constructor(private _lspModelProvider: LspModelProvider) {}
+
+    /** Return stats from the most recent LSP model response, if available. */
+    getLastStats(): { totalElements: number; resolvedElements: number; unresolvedElements: number; parseTimeMs: number; modelBuildTimeMs: number } | undefined {
+        return this._lastStats;
+    }
 
     refresh(): void {
         if (this.currentDocument) {
@@ -56,28 +93,31 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<vscode.Tre
 
         try {
             const { getOutputChannel } = require('../extension');
-            getOutputChannel()?.appendLine(`ModelExplorer: Starting parseWithSemanticResolution for ${document.fileName}`);
+            getOutputChannel()?.appendLine(`ModelExplorer: Starting LSP model request for ${document.fileName}`);
         } catch { /* ignore */ }
 
         try {
-            // Phase 3: Use semantic resolution for enhanced element data
-            const resolutionResult = await this._parser.parseWithSemanticResolution(document);
+            // ── LSP path ──────────────────────────────────────
+            const result = await this._lspModelProvider.getModel(
+                document.uri.toString(),
+                ['elements', 'relationships'],
+                cancellationToken,
+            );
 
-            // Check cancellation after parse (file may have been closed during parse)
             if (cancellationToken?.isCancellationRequested || document.isClosed) {
-                try {
-                    const { getOutputChannel } = require('../extension');
-                    getOutputChannel()?.appendLine(`ModelExplorer: cancelled/closed after parse for ${document.fileName}, discarding result`);
-                } catch { /* ignore */ }
                 return;
             }
 
+            // Capture stats for the status-bar metrics feature
+            this._lastStats = result.stats;
+
+            // Convert DTOs → SysMLElement so tree items work unchanged
+            this.rootElements = (result.elements ?? []).map(dtoToSysMLElement);
+
             try {
                 const { getOutputChannel } = require('../extension');
-                getOutputChannel()?.appendLine(`ModelExplorer: Resolution returned ${resolutionResult.elements.length} enriched elements`);
+                getOutputChannel()?.appendLine(`ModelExplorer: LSP returned ${result.elements?.length ?? 0} elements`);
             } catch { /* ignore */ }
-
-            this.rootElements = this._parser.convertEnrichedToSysMLElements(resolutionResult.elements);
 
             try {
                 const { getOutputChannel } = require('../extension');

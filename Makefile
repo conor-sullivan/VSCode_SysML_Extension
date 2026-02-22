@@ -5,11 +5,6 @@ NODE_MODULES = node_modules
 OUT_DIR = out
 SRC_DIR = src
 DIST_DIR = dist
-LIBRARY_DIR = sysml.library
-GRAMMAR_REPO = daltskin/sysml-v2-grammar
-LIBRARY_VERSION ?= $(shell gh release view --repo $(GRAMMAR_REPO) --json tagName --jq '.tagName' 2>/dev/null | sed 's/^v//')
-LIBRARY_REPO = Systems-Modeling/SysML-v2-Release
-LIBRARY_URL = https://github.com/$(LIBRARY_REPO)/archive/refs/tags/$(LIBRARY_VERSION).tar.gz
 PACKAGE_NAME = $(shell node -p "require('./package.json').name")
 VERSION = $(shell node -p "require('./package.json').version")
 
@@ -31,7 +26,6 @@ help:
 	@echo ""
 	@echo "$(YELLOW)Available targets:$(NC)"
 	@echo "  $(GREEN)install$(NC)        - Install dependencies"
-	@echo "  $(GREEN)download-library$(NC) - Download official SysML v2 standard library"
 	@echo "  $(GREEN)compile$(NC)        - Compile TypeScript to JavaScript"
 	@echo "  $(GREEN)watch$(NC)          - Watch and compile on changes"
 	@echo "  $(GREEN)test$(NC)           - Run all tests"
@@ -47,8 +41,6 @@ help:
 	@echo "  $(GREEN)dev$(NC)            - Start development environment"
 	@echo "  $(GREEN)debug$(NC)          - Prepare for debugging (then press F5 in VS Code)"
 	@echo "  $(GREEN)debug-watch$(NC)    - Launch watch mode for debugging with auto-recompile"
-	@echo "  $(GREEN)grammar$(NC)        - Generate ANTLR4 grammar from SysML v2 spec BNF"
-	@echo "  $(GREEN)grammar-clean$(NC)  - Remove generated grammar files"
 	@echo "  $(GREEN)prepublish$(NC)     - Prepare for publishing"
 	@echo "  $(GREEN)info$(NC)           - Show project information"
 	@echo "  $(GREEN)help$(NC)           - Show this help message"
@@ -62,38 +54,12 @@ $(NODE_MODULES): package.json package-lock.json
 	npm install
 	@echo "$(GREEN)Dependencies installed successfully!$(NC)"
 
-# Download SysML v2 standard library
-.PHONY: download-library
-download-library:
-	@echo "$(YELLOW)Downloading SysML v2 standard library ($(LIBRARY_VERSION))...$(NC)"
-	@if [ -d "$(LIBRARY_DIR)" ]; then \
-		echo "$(BLUE)Library already exists. Remove $(LIBRARY_DIR) to re-download.$(NC)"; \
-	else \
-		curl -L $(LIBRARY_URL) | tar xz && \
-		mv SysML-v2-Release-$(LIBRARY_VERSION)/sysml.library . && \
-		rm -rf SysML-v2-Release-$(LIBRARY_VERSION) && \
-		echo "$(GREEN)Library downloaded successfully!$(NC)" && \
-		echo "$(BLUE)Library location: $(LIBRARY_DIR)$(NC)" && \
-		echo "$(BLUE)Library files: $$(find $(LIBRARY_DIR) -name '*.sysml' -o -name '*.kerml' | wc -l) files$(NC)"; \
-	fi
-
-# Check if library exists
-.PHONY: check-library
-check-library:
-	@if [ ! -d "$(LIBRARY_DIR)" ]; then \
-		echo "$(YELLOW)Standard library not found. Downloading...$(NC)"; \
-		$(MAKE) download-library; \
-	else \
-		echo "$(GREEN)Standard library found at $(LIBRARY_DIR)$(NC)"; \
-	fi
-
 # Compile TypeScript
 .PHONY: compile
 compile: $(OUT_DIR)
 
 $(OUT_DIR): $(NODE_MODULES) tsconfig.json $(shell find $(SRC_DIR) -name "*.ts" 2>/dev/null || echo "")
 	@echo "$(YELLOW)Compiling TypeScript...$(NC)"
-	@$(MAKE) check-library
 	npm run compile
 	@echo "$(GREEN)Compilation completed!$(NC)"
 
@@ -254,37 +220,6 @@ info:
 	@echo "  Node modules: $(shell [ -d $(NODE_MODULES) ] && echo '✓ Installed' || echo '✗ Not installed')"
 	@echo "  Compiled: $(shell [ -d $(OUT_DIR) ] && echo '✓ Yes' || echo '✗ No')"
 	@echo "  Package exists: $(shell [ -f "$(PACKAGE_NAME)-$(VERSION).vsix" ] && echo '✓ Yes' || echo '✗ No')"
-
-# Download pre-built grammar from sysml-v2-grammar releases
-.PHONY: grammar
-grammar:
-	@echo "$(YELLOW)Downloading grammar from $(GRAMMAR_REPO) release...$(NC)"
-	@if ! command -v gh >/dev/null 2>&1; then \
-		echo "$(RED)GitHub CLI (gh) is required but not installed.$(NC)"; exit 1; fi
-	@mkdir -p grammar
-	@rm -rf /tmp/sysml-grammar-dl
-	@mkdir -p /tmp/sysml-grammar-dl
-	gh release download --repo $(GRAMMAR_REPO) --pattern '*.zip' --dir /tmp/sysml-grammar-dl --clobber
-	@unzip -o -j /tmp/sysml-grammar-dl/*.zip '*.g4' '*.tokens' -d grammar 2>/dev/null || \
-		unzip -o -j /tmp/sysml-grammar-dl/*.zip '*.g4' -d grammar
-	@rm -rf /tmp/sysml-grammar-dl
-	@echo "$(GREEN)Grammar downloaded successfully!$(NC)"
-	@echo "$(YELLOW)Run 'npm run antlr:generate' to compile TypeScript sources.$(NC)"
-
-# Generate grammar and compile ANTLR4 to TypeScript in one step
-.PHONY: grammar-full
-grammar-full: grammar
-	@echo "$(YELLOW)Compiling ANTLR4 grammar to TypeScript...$(NC)"
-	npm run antlr:generate
-	@echo "$(GREEN)ANTLR4 TypeScript sources generated!$(NC)"
-
-# Clean generated grammar files
-.PHONY: grammar-clean
-grammar-clean:
-	@echo "$(YELLOW)Cleaning generated grammar files...$(NC)"
-	rm -rf .grammar-cache
-	rm -f grammar/*.g4 grammar/*.tokens
-	@echo "$(GREEN)Grammar files cleaned.$(NC)"
 
 # Verify all is working
 .PHONY: verify

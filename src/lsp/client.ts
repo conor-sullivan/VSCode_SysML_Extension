@@ -11,11 +11,25 @@ import * as vscode from 'vscode';
 import {
     LanguageClient,
     LanguageClientOptions,
+    ProgressToken,
     ServerOptions,
     TransportKind,
+    WorkDoneProgressBegin,
+    WorkDoneProgressEnd,
 } from 'vscode-languageclient/node';
+import type { SysMLStatusParams } from '../providers/sysmlModelTypes';
 
 let client: LanguageClient | undefined;
+
+// ── WorkDoneProgress timeout protection ──────────────────────────
+// The LSP server creates a WorkDoneProgress token (begin → … → end)
+// for each parse.  When a parse is cancelled mid-flight the promise
+// never resolves, so progress.done() is never called and the
+// "Parsing …" spinner gets stuck.  We track active "Parsing" tokens
+// here and force-end them after a safety timeout.
+const PROGRESS_TIMEOUT_MS = 30_000;
+let activeParsingToken: ProgressToken | undefined;
+let parsingTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
 /**
  * Resolve the absolute path to the sysml-v2-lsp server module.
@@ -75,6 +89,44 @@ export function startLanguageClient(
                 }
                 return next(document, range, token);
             },
+
+            // Guard against stuck "Parsing …" progress indicators.
+            // When a new "Parsing" begin arrives while one is already
+            // active, force-end the old one first.  Also set a safety
+            // timeout to auto-end any token that lingers too long.
+            handleWorkDoneProgress: (token, params, next) => {
+                if ('kind' in params && params.kind === 'begin') {
+                    const beginParams = params as WorkDoneProgressBegin;
+                    if (beginParams.title === 'Parsing') {
+                        // End any previously stuck "Parsing" progress
+                        if (activeParsingToken !== undefined) {
+                            const endMsg: WorkDoneProgressEnd = { kind: 'end' };
+                            next(activeParsingToken, endMsg);
+                        }
+                        if (parsingTimeoutHandle) {
+                            clearTimeout(parsingTimeoutHandle);
+                        }
+                        activeParsingToken = token;
+                        parsingTimeoutHandle = setTimeout(() => {
+                            if (activeParsingToken !== undefined) {
+                                const endMsg: WorkDoneProgressEnd = { kind: 'end' };
+                                next(activeParsingToken, endMsg);
+                                activeParsingToken = undefined;
+                            }
+                            parsingTimeoutHandle = undefined;
+                        }, PROGRESS_TIMEOUT_MS);
+                    }
+                } else if ('kind' in params && params.kind === 'end') {
+                    if (token === activeParsingToken) {
+                        activeParsingToken = undefined;
+                        if (parsingTimeoutHandle) {
+                            clearTimeout(parsingTimeoutHandle);
+                            parsingTimeoutHandle = undefined;
+                        }
+                    }
+                }
+                next(token, params);
+            },
         },
     };
 
@@ -86,7 +138,26 @@ export function startLanguageClient(
     );
 
     client.start().then(
-        () => outputChannel.appendLine('SysML v2 language server started successfully'),
+        () => {
+            outputChannel.appendLine('SysML v2 language server started successfully');
+
+            // Listen for sysml/status notifications to drive the
+            // "Parsing …" status-bar indicator and re-fetch model
+            // data once parsing completes (cold-start fix).
+            if (client) {
+                client.onNotification('sysml/status', (params: SysMLStatusParams) => {
+                    const ext = require('../extension');
+                    if (params.state === 'begin' || params.state === 'progress') {
+                        ext.showParseProgress(params.fileName ?? params.message ?? 'Working');
+                    } else if (params.state === 'end') {
+                        ext.hideParseProgress();
+                        // Re-trigger model fetch now that the server
+                        // has finished parsing this file.
+                        ext.notifyServerParseDone(params.uri);
+                    }
+                });
+            }
+        },
         (err) => {
             const msg = `Failed to start SysML language server: ${err}`;
             outputChannel.appendLine(msg);

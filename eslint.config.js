@@ -28,6 +28,7 @@ module.exports = [
         exports: 'readonly',
         global: 'readonly',
         setTimeout: 'readonly',
+        clearTimeout: 'readonly',
         AbortSignal: 'readonly',
         AbortController: 'readonly',
         DOMException: 'readonly',
@@ -103,29 +104,6 @@ module.exports = [
     }
   },
   {
-    // Special configuration for ANTLR parser files that need 'any' types
-    files: ['src/parser/antlrSysMLParser.ts'],
-    languageOptions: {
-      parser: tsParser,
-      parserOptions: {
-        ecmaVersion: 2020,
-        sourceType: 'module',
-        project: './tsconfig.json'
-      }
-    },
-    plugins: {
-      '@typescript-eslint': tsPlugin
-    },
-    rules: {
-      'no-unused-vars': 'off',
-      '@typescript-eslint/no-explicit-any': 'off', // Disable for ANTLR integration
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
-      'no-console': 'warn',
-      'prefer-const': 'error',
-      'no-var': 'error'
-    }
-  },
-  {
     ignores: [
       'out/**',
       'node_modules/**',
@@ -133,15 +111,7 @@ module.exports = [
       '**/*.d.ts',
       'dist/**',
       'coverage/**',
-      '*.vsix',
-      // Generated ANTLR files
-      'src/parser/SysMLv2.ts',
-      'src/parser/SysMLv2Lexer.ts',
-      'src/parser/SysMLv2Visitor.ts',
-      'src/parser/SysMLv2Listener.ts',
-      'src/parser/generated/**/*.ts',
-      // Duplicate ANTLR files in generated folder
-      'src/parser/generated/grammar/*.ts'
+      '*.vsix'
     ]
   }
 ];

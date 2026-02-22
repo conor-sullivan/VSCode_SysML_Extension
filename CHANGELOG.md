@@ -5,6 +5,37 @@ All notable changes to the SysML v2.0 Language Support extension will be documen
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0]
+
+### Added
+
+- **LSP model provider** (`src/providers/lspModelProvider.ts`) — sends `sysml/model` requests to the language server for structured model data
+- **Model type definitions** (`src/providers/sysmlModelTypes.ts`) — shared TypeScript types for elements, relationships, and model statistics
+- **Model Dashboard panel** (`src/panels/modelDashboardPanel.ts`) — webview dashboard showing model statistics and build timing
+- **Go-to-Definition for library imports** — navigate to standard library definitions from import statements
+- **`modelBuildTimeMs` timing metric** — real ANTLR parse time from the LSP server, reported consistently across status bar, dashboard, and output log
+
+### Changed
+
+- **Architecture: complete migration to LSP-only model** — visualization panel and model explorer now use `sysml/model` LSP requests instead of the in-extension ANTLR parser; the extension no longer bundles any parser, resolver, or library code
+- **Visualization panel refactored** (`src/visualization/visualizationPanel.ts`) — rebuilt to consume LSP model data directly
+- **Model Explorer refactored** (`src/explorer/modelExplorerProvider.ts`) — uses LSP model provider instead of in-extension parser
+- **Extension activation refactored** (`src/extension.ts`) — streamlined for LSP-only architecture
+
+### Fixed
+
+- **LSP cold-start race condition** — model explorer and visualization now wait for the server to be ready
+- **Filename encoding in logs** — spaces in filenames are properly handled
+
+### Removed
+
+- **In-extension ANTLR parser** (`src/parser/`) — `antlrSysMLParser.ts`, `sysmlParser.ts`, `parserWorker.ts`, `parserWorkerHost.ts`, `libraryIndexer.ts`, `vscodeMock.ts`, and `generated/` directory
+- **Semantic resolver** (`src/resolver/`) — `resolver.ts`, `diagnostics.ts`, `types.ts`, `index.ts`
+- **Library service** (`src/library/`) — `service.ts`, `cacheManager.ts`, `compiler.ts`, `types.ts`, `index.ts`
+- **Grammar files** (`grammar/`) — `SysMLv2Lexer.g4`, `SysMLv2Parser.g4`
+- **`sysml.library/` directory** — standard library files now bundled in the LSP server
+- **`antlr4` runtime dependency**
+
 ## [0.20.0]
 
 ### Fixed
