@@ -14,6 +14,15 @@ function sleep(ms: number): Promise<void> {
 
 suite('LSP Client Integration Tests', () => {
 
+    // Ensure the extension is activated before running LSP-dependent tests
+    suiteSetup(async function () {
+        this.timeout(10000);
+        const ext = vscode.extensions.getExtension('jamied.sysml-v2-support');
+        if (ext && !ext.isActive) {
+            await ext.activate();
+        }
+    });
+
     test('Language server commands are registered', async function () {
         this.timeout(5000);
         const commands = await vscode.commands.getCommands(true);
