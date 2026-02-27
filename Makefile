@@ -16,6 +16,8 @@ BLUE = \033[0;34m
 NC = \033[0m # No Color
 
 # Default target
+.DEFAULT_GOAL := help
+
 .PHONY: all
 all: install compile
 
@@ -203,13 +205,18 @@ clean:
 	rm -f tsconfig.tsbuildinfo
 	@echo "$(GREEN)Build artifacts cleaned!$(NC)"
 
-# Clean everything including dependencies
+# Clean everything including dependencies, then reinstall and recompile
 .PHONY: clean-all
 clean-all: clean
 	@echo "$(YELLOW)Cleaning all files including dependencies...$(NC)"
 	rm -rf $(NODE_MODULES)
 	rm -f package-lock.json
 	@echo "$(GREEN)All files cleaned!$(NC)"
+	@echo "$(YELLOW)Reinstalling dependencies...$(NC)"
+	npm install
+	@echo "$(YELLOW)Recompiling...$(NC)"
+	npm run compile
+	@echo "$(GREEN)Clean rebuild complete - ready for F5 debugging!$(NC)"
 
 # Show project information
 .PHONY: info

@@ -27,6 +27,7 @@
   ],
   "activationEvents": [
     "onLanguage:sysml",
+    "workspaceContains:**/*.sysml",
     "onMcpServerDefinitionProvider:sysml-v2-mcp",
     "onCommand:sysml.showVisualizer",
     "onCommand:sysml.showModelExplorer",
@@ -42,7 +43,9 @@
     "onCommand:sysml.showTypeHierarchy",
     "onCommand:sysml.showCallHierarchy",
     "onCommand:sysml.showFeatureInspector",
-    "onCommand:sysml.showModelDashboard"
+    "onCommand:sysml.showModelDashboard",
+    "onCommand:sysml.showSysRunner",
+    "onCommand:sysml.visualizePackage"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -133,6 +136,24 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "sysml.toggleModelExplorerViewMode",
+        "title": "Toggle View: By File / Semantic Model",
+        "category": "SysML",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "sysml.switchToFileView",
+        "title": "Switch to By File view",
+        "category": "SysML",
+        "icon": "$(files)"
+      },
+      {
+        "command": "sysml.switchToSemanticView",
+        "title": "Switch to Semantic Model view",
+        "category": "SysML",
+        "icon": "$(symbol-class)"
+      },
+      {
         "command": "sysml.jumpToDefinition",
         "title": "Jump to Definition",
         "category": "SysML"
@@ -172,6 +193,18 @@
         "title": "Show Model Dashboard",
         "category": "SysML",
         "icon": "$(dashboard)"
+      },
+      {
+        "command": "sysml.showSysRunner",
+        "title": "Play SysML World — Learn SysML v2",
+        "category": "SysML",
+        "icon": "$(game)"
+      },
+      {
+        "command": "sysml.visualizePackage",
+        "title": "Visualize Package",
+        "category": "SysML",
+        "icon": "$(preview)"
       }
     ],
     "menus": {
@@ -179,6 +212,18 @@
         {
           "command": "sysml.showFeatureInspector",
           "when": "resourceLangId == sysml",
+          "group": "sysml@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sysml.visualizePackage",
+          "when": "view == sysmlModelExplorer && viewItem == sysmlPackage",
+          "group": "inline"
+        },
+        {
+          "command": "sysml.visualizePackage",
+          "when": "view == sysmlModelExplorer && viewItem == sysmlPackage",
           "group": "sysml@1"
         }
       ],
@@ -192,17 +237,34 @@
       ],
       "view/title": [
         {
-          "command": "sysml.refreshModelTree",
-          "when": "view == sysmlModelExplorer",
+          "command": "sysml.switchToFileView",
+          "when": "view == sysmlModelExplorer && sysml.hasWorkspace && sysml.workspaceViewMode == bySemantic",
           "group": "navigation"
         },
         {
-          "command": "sysml.exportVisualization",
+          "command": "sysml.switchToSemanticView",
+          "when": "view == sysmlModelExplorer && sysml.hasWorkspace && sysml.workspaceViewMode == byFile",
+          "group": "navigation"
+        },
+        {
+          "command": "sysml.refreshModelTree",
           "when": "view == sysmlModelExplorer",
           "group": "navigation"
         }
       ],
       "commandPalette": [
+        {
+          "command": "sysml.visualizePackage",
+          "when": "false"
+        },
+        {
+          "command": "sysml.switchToFileView",
+          "when": "false"
+        },
+        {
+          "command": "sysml.switchToSemanticView",
+          "when": "false"
+        },
         {
           "command": "sysml.formatDocument",
           "when": "resourceLangId == sysml"
@@ -229,6 +291,10 @@
         {
           "command": "sysml.showModelDashboard",
           "when": "resourceLangId == sysml"
+        },
+        {
+          "command": "sysml.showSysRunner",
+          "when": "false"
         }
       ],
       "explorer/context": [
@@ -264,6 +330,11 @@
         {
           "id": "sysmlModelExplorer",
           "name": "SysML Model Explorer",
+          "when": "sysml.modelLoaded"
+        },
+        {
+          "id": "sysmlFeatureExplorer",
+          "name": "SysML Feature Explorer",
           "when": "sysml.modelLoaded"
         }
       ]
@@ -344,6 +415,24 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Enable inlay hints from the SysML language server. When enabled, the server shows inline type annotations next to identifiers. **Note:** this can interfere with renaming and editing identifiers — disable if you experience editing issues."
+        },
+        "sysml.workspace.preloadOnOpen": {
+          "type": "string",
+          "enum": [
+            "always",
+            "workspaceOnly",
+            "never"
+          ],
+          "default": "workspaceOnly",
+          "markdownDescription": "Control when the LSP server pre-parses all `.sysml` / `.kerml` files in the workspace for cross-file navigation (go-to-definition, find references).\n- **always**: Pre-parse on every folder or workspace open\n- **workspaceOnly** *(default)*: Pre-parse only when a `.code-workspace` file is opened\n- **never**: Never pre-parse — files are parsed lazily when opened"
+        },
+        "sysml.workspace.excludePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Glob patterns for directories to exclude from workspace pre-parsing. These are matched against directory **names** (not full paths).\n\nExamples: `temp`, `archive`, `*.bak`\n\nThe following directories are always excluded: `node_modules`, `.git`, `dist`, `out`, `.vscode`."
         }
       }
     },
@@ -360,7 +449,7 @@
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
     "test": "node ./out/test/runTest.js",
-    "test:unit": "npm run compile && mocha --ui tdd --require ts-node/register --require src/test/register-vscode-mock.ts src/test/exportScaleLogic.test.ts",
+    "test:unit": "npm run compile && mocha --ui tdd --require ts-node/register --require src/test/register-vscode-mock.ts 'src/test/**/*.test.ts'",
     "build:webview-assets": "node ./scripts/copy-webview-assets.js",
     "lint": "eslint src --ext ts",
     "lint:fix": "eslint src --ext ts --fix",
@@ -384,13 +473,13 @@
     "@typescript-eslint/parser": "^8.15.0",
     "@vscode/test-electron": "^2.4.1",
     "@vscode/vsce": "^3.2.0",
-    "c8": "^10.1.3",
+    "c8": "^11.0.0",
     "cytoscape": "^3.33.1",
     "cytoscape-elk": "^2.3.0",
     "cytoscape-svg": "^0.4.0",
     "d3": "^7.9.0",
     "eslint": "^9.15.0",
-    "glob": "^11.0.0",
+    "glob": "^13.0.0",
     "mocha": "^11.0.0",
     "rimraf": "^6.0.1",
     "ts-node": "^10.9.2",
@@ -398,10 +487,12 @@
   },
   "dependencies": {
     "elkjs": "^0.11.0",
-    "sysml-v2-lsp": "^0.2.0",
+    "sysml-v2-lsp": "file:../sysml-v2-lsp",
     "vscode-languageclient": "^9.0.1"
   },
   "overrides": {
-    "diff": "^8.0.3"
+    "diff": "^8.0.3",
+    "minimatch": "^10.2.1",
+    "glob": "^13.0.0"
   }
 }

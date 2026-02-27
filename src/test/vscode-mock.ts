@@ -336,18 +336,118 @@ export class Hover {
     ) {}
 }
 
+// ─── Shared mock state ───────────────────────────────────────────
+
+/** Flag so tests can detect they are running against the mock. */
+export const _isMock = true;
+
+/** Module-level store for workspace.getConfiguration persistence. */
+const _configStore: Record<string, Record<string, any>> = {};
+
+/** Known default configuration values for the SysML extension. */
+const _configDefaults: Record<string, Record<string, any>> = {
+    sysml: {
+        'validation.enabled': true,
+        'format.indentSize': 4,
+        'visualization.defaultView': 'bdd',
+        'export.defaultScale': 2,
+    },
+    sysmlLanguageServer: {
+        'trace.server': 'off',
+    },
+};
+
+/** Registered commands (populated via commands.registerCommand). */
+const _registeredCommands = new Map<string, (...args: any[]) => any>();
+
 // ─── Workspace / Window stubs ────────────────────────────────────
 
 export const workspace = {
-    openTextDocument: async (_uri: any): Promise<any> => {
+    openTextDocument: async (uriOrOptions: any): Promise<any> => {
+        // Support the { language, content } form used by many tests
+        if (uriOrOptions && typeof uriOrOptions === 'object' && 'content' in uriOrOptions) {
+            const content: string = uriOrOptions.content ?? '';
+            const language: string = uriOrOptions.language ?? 'plaintext';
+            const lines = content.split('\n');
+            const uri = Uri.parse(`untitled:Untitled-${Date.now()}`);
+            return {
+                uri,
+                languageId: language,
+                fileName: uri.fsPath,
+                isClosed: false,
+                isDirty: false,
+                isUntitled: true,
+                version: 1,
+                eol: EndOfLine.LF,
+                lineCount: lines.length,
+                getText: (range?: Range) => {
+                    if (!range) return content;
+                    const startOff = lines.slice(0, range.start.line).reduce((s, l) => s + l.length + 1, 0) + range.start.character;
+                    const endOff = lines.slice(0, range.end.line).reduce((s, l) => s + l.length + 1, 0) + range.end.character;
+                    return content.substring(startOff, endOff);
+                },
+                lineAt: (lineOrPos: number | Position) => {
+                    const lineNum = typeof lineOrPos === 'number' ? lineOrPos : lineOrPos.line;
+                    const text = lines[lineNum] ?? '';
+                    return {
+                        lineNumber: lineNum,
+                        text,
+                        range: new Range(lineNum, 0, lineNum, text.length),
+                        rangeIncludingLineBreak: new Range(lineNum, 0, lineNum + 1, 0),
+                        firstNonWhitespaceCharacterIndex: text.search(/\S/) === -1 ? 0 : text.search(/\S/),
+                        isEmptyOrWhitespace: text.trim().length === 0,
+                    };
+                },
+                positionAt: (offset: number) => {
+                    let line = 0;
+                    let remaining = offset;
+                    for (const l of lines) {
+                        if (remaining <= l.length) return new Position(line, remaining);
+                        remaining -= l.length + 1;
+                        line++;
+                    }
+                    return new Position(Math.max(0, lines.length - 1), (lines[lines.length - 1] ?? '').length);
+                },
+                offsetAt: (pos: Position) => {
+                    let offset = 0;
+                    for (let i = 0; i < pos.line && i < lines.length; i++) offset += lines[i].length + 1;
+                    return offset + pos.character;
+                },
+                validateRange: (range: Range) => range,
+                validatePosition: (pos: Position) => pos,
+                save: async () => true,
+                getWordRangeAtPosition: () => undefined,
+            };
+        }
         throw new Error('workspace.openTextDocument is not available in unit test mode');
     },
-    getConfiguration: (_section?: string) => ({
-        get: <T>(_key: string, defaultValue?: T) => defaultValue,
-        has: (_key: string) => false,
-        inspect: (_key: string) => undefined,
-        update: async () => {},
-    }),
+    getConfiguration: (section?: string) => {
+        const sectionKey = section ?? '';
+        const defaults = _configDefaults[sectionKey] ?? {};
+        if (!_configStore[sectionKey]) _configStore[sectionKey] = {};
+        const store = _configStore[sectionKey];
+        return {
+            get: <T>(key: string, defaultValue?: T): T | undefined => {
+                if (key in store && store[key] !== undefined) return store[key] as T;
+                if (key in defaults) return defaults[key] as T;
+                return defaultValue;
+            },
+            has: (key: string) => key in store || key in defaults,
+            inspect: (key: string) => {
+                if (key in defaults || key in store) {
+                    return {
+                        key: section ? `${section}.${key}` : key,
+                        defaultValue: defaults[key],
+                        globalValue: store[key],
+                    };
+                }
+                return undefined;
+            },
+            update: async (key: string, value: any, _target?: any) => {
+                store[key] = value;
+            },
+        };
+    },
     onDidChangeTextDocument: () => ({ dispose: () => {} }),
     onDidOpenTextDocument: () => ({ dispose: () => {} }),
     onDidCloseTextDocument: () => ({ dispose: () => {} }),
@@ -375,18 +475,49 @@ export const window = {
     withProgress: async (_options: any, task: any) => task({ report: () => {} }),
     activeTextEditor: undefined as any,
     showTextDocument: async () => undefined,
-    createWebviewPanel: () => ({
-        webview: { html: '', onDidReceiveMessage: () => ({ dispose: () => {} }), asWebviewUri: (u: any) => u },
-        onDidDispose: () => ({ dispose: () => {} }),
-        reveal: () => {},
+    createWebviewPanel: (_viewType: string, _title: string, _showOptions: any, _options?: any) => {
+        let html = '';
+        const disposeFns: (() => void)[] = [];
+        let disposed = false;
+        return {
+            webview: {
+                get html() { return html; },
+                set html(value: string) { html = value; },
+                onDidReceiveMessage: () => ({ dispose: () => {} }),
+                asWebviewUri: (u: any) => u,
+                postMessage: async () => true,
+            },
+            onDidDispose: (fn: () => void) => { disposeFns.push(fn); return { dispose: () => {} }; },
+            onDidChangeViewState: () => ({ dispose: () => {} }),
+            reveal: () => {},
+            dispose: () => { if (disposed) return; disposed = true; for (const fn of disposeFns) fn(); },
+            visible: true,
+            viewColumn: ViewColumn.Active,
+        };
+    },
+    createTreeView: (_viewId: string, _options: any) => ({
+        onDidChangeSelection: () => ({ dispose: () => {} }),
+        onDidChangeVisibility: () => ({ dispose: () => {} }),
+        onDidExpandElement: () => ({ dispose: () => {} }),
+        onDidCollapseElement: () => ({ dispose: () => {} }),
+        reveal: async () => {},
         dispose: () => {},
+        selection: [],
+        visible: true,
     }),
 };
 
 export const commands = {
-    executeCommand: async (..._args: any[]) => undefined,
-    getCommands: async () => [] as string[],
-    registerCommand: (_command: string, _callback: (...args: any[]) => any) => ({ dispose: () => {} }),
+    executeCommand: async (command: string, ...args: any[]) => {
+        const handler = _registeredCommands.get(command);
+        if (handler) return handler(...args);
+        return undefined;
+    },
+    getCommands: async (_filterInternal?: boolean): Promise<string[]> => [..._registeredCommands.keys()],
+    registerCommand: (command: string, callback: (...args: any[]) => any) => {
+        _registeredCommands.set(command, callback);
+        return { dispose: () => { _registeredCommands.delete(command); } };
+    },
 };
 
 export const languages = {
@@ -405,7 +536,21 @@ export const languages = {
 };
 
 export const extensions = {
-    getExtension: (_id: string) => undefined,
+    getExtension: (id: string) => {
+        if (id === 'jamied.sysml-v2-support') {
+            return {
+                id,
+                extensionUri: Uri.parse('file:///mock-extension'),
+                extensionPath: '/mock-extension',
+                isActive: true,
+                packageJSON: {},
+                exports: undefined,
+                activate: async () => {},
+                extensionKind: 1,
+            };
+        }
+        return undefined;
+    },
 };
 
 // ─── Event constructors ─────────────────────────────────────────
@@ -450,14 +595,41 @@ export class TreeItem {
     public collapsibleState?: TreeItemCollapsibleState;
     public iconPath?: any;
     public description?: string;
-    public tooltip?: string;
+    public tooltip?: string | MarkdownString;
     public command?: any;
     public contextValue?: string;
+    public resourceUri?: any;
 
     constructor(label: string, collapsibleState?: TreeItemCollapsibleState) {
         this.label = label;
         this.collapsibleState = collapsibleState;
     }
+}
+
+// ─── ThemeIcon / ThemeColor ─────────────────────────────────────
+
+export class ThemeIcon {
+    static readonly File = new ThemeIcon('file');
+    static readonly Folder = new ThemeIcon('folder');
+
+    constructor(
+        public readonly id: string,
+        public readonly color?: ThemeColor,
+    ) {}
+}
+
+export class ThemeColor {
+    constructor(public readonly id: string) {}
+}
+
+// ─── ViewColumn ─────────────────────────────────────────────────
+
+export enum ViewColumn {
+    Active = -1,
+    Beside = -2,
+    One = 1,
+    Two = 2,
+    Three = 3,
 }
 
 // ─── MarkdownString ─────────────────────────────────────────────

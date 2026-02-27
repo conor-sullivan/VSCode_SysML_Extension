@@ -1,8 +1,11 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 
+const _isUnitTest = (vscode as any)._isMock === true;
+
 suite('SysML Keyword Diagnostics', () => {
     test('Adds squiggles for likely keyword typos (packagedasf, party)', async function() {
+        if (_isUnitTest) { return this.skip(); } // needs real LSP diagnostics
         this.timeout(10000);
 
         const content = `packagedasf MySystem {

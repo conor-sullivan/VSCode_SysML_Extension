@@ -409,6 +409,13 @@ package SmartHomeSystem {
         attribute realTimeData : Boolean;
     }
 
+    part def SolarPanel {
+        attribute ratedPower : PowerValue;
+        attribute efficiency : Real;
+        attribute orientation : String;
+        attribute active : Boolean;
+    }
+
     part def HomeBattery {
         attribute capacity : EnergyValue;
         attribute chargeLevel : Real;

@@ -8,6 +8,8 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 
+const _isUnitTest = (vscode as any)._isMock === true;
+
 function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -24,6 +26,7 @@ suite('LSP Client Integration Tests', () => {
     });
 
     test('Language server commands are registered', async function () {
+        if (_isUnitTest) { return this.skip(); } // needs real extension activation
         this.timeout(5000);
         const commands = await vscode.commands.getCommands(true);
         assert.ok(commands.includes('sysml.restartServer'), 'sysml.restartServer command should be registered');
@@ -31,6 +34,7 @@ suite('LSP Client Integration Tests', () => {
     });
 
     test('LSP provides diagnostics for syntax errors', async function () {
+        if (_isUnitTest) { return this.skip(); } // needs real LSP server
         this.timeout(20000);
 
         const content = 'part def Broken {\n    attribute x :\n}';
@@ -52,6 +56,7 @@ suite('LSP Client Integration Tests', () => {
     });
 
     test('LSP provides hover information', async function () {
+        if (_isUnitTest) { return this.skip(); } // needs real LSP server
         this.timeout(20000);
 
         const content = 'package Demo {\n    part def Vehicle {\n        attribute speed : Real;\n    }\n}';
@@ -77,6 +82,7 @@ suite('LSP Client Integration Tests', () => {
     });
 
     test('LSP provides document symbols', async function () {
+        if (_isUnitTest) { return this.skip(); } // needs real LSP server
         this.timeout(20000);
 
         const content = 'package Demo {\n    part def Vehicle {\n        attribute speed : Real;\n    }\n    part car : Vehicle;\n}';
@@ -98,6 +104,7 @@ suite('LSP Client Integration Tests', () => {
     });
 
     test('LSP provides completions', async function () {
+        if (_isUnitTest) { return this.skip(); } // needs real LSP server
         this.timeout(20000);
 
         const content = 'package Demo {\n    par\n}';

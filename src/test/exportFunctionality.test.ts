@@ -1,6 +1,8 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 
+const _isUnitTest = (vscode as any)._isMock === true;
+
 suite('Export Functionality Test Suite', () => {
 
     // Ensure extension is activated before running tests
@@ -72,6 +74,7 @@ suite('Export Functionality Test Suite', () => {
 
     suite('Export Command Registration', () => {
         test('Export visualization command should be registered', async function() {
+            if (_isUnitTest) { return this.skip(); } // needs real extension activation
             this.timeout(5000);
 
             const commands = await vscode.commands.getCommands(true);

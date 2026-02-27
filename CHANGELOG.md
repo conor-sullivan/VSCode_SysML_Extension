@@ -5,6 +5,33 @@ All notable changes to the SysML v2.0 Language Support extension will be documen
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0]
+
+### Added
+
+- **Feature Inspector panel** (`src/panels/featureInspectorPanel.ts`) — cursor-tracking webview showing resolved type information, specialization breadcrumbs, feature tables with direction/multiplicity/modifier badges, clickable type drill-down, and navigation history with back button
+- **Feature Explorer tree view** (`src/explorer/featureExplorerProvider.ts`) — master-detail sidebar showing resolved type info, specialization chains, and feature groups (parts, ports, attributes, etc.) for the selected definition
+- **Model Complexity Index (MCI)** — status bar indicator (0–100 score) with hotspot detection for complex elements, documentation coverage, coupling analysis, and textual rating
+- **Model Explorer workspace modes** — toggle between **By File** and **Semantic Model** views; workspace-wide model loaded automatically for `.code-workspace` projects; active document auto-revealed in tree
+- **Diagnostic-reactive status bar** — live error/warning counts with colour-coded icons (`$(error)` / `$(warning)` / `$(check)`); click to open the Problems panel
+- **LSP server health in status bar tooltip** — uptime, heap/RSS memory usage, and cache statistics (documents, symbol tables, semantic tokens)
+- **`SysML: Show Type Hierarchy`** command — surfaces VS Code's built-in type hierarchy view for SysML definitions
+- **`SysML: Show Call Hierarchy`** command — surfaces VS Code's built-in call hierarchy view for action/state invocations
+- **`SysML: Toggle View: By File / Semantic Model`** command — switch Model Explorer between file-based and semantic views
+- **Workspace pre-parsing settings** — `sysml.workspace.preloadOnOpen` (`always` / `workspaceOnly` / `never`) and `sysml.workspace.excludePatterns` (glob array)
+- **Camera Example** multi-file sample (`samples/Camera Example/`) — `.code-workspace` with 8 SysML files covering General View, Interconnection View, Activity, Sequence, State, and Use Case diagrams
+- **Animated parse progress indicator** — status bar animation showing parse stages (assembling model, building blocks, linking elements) with real-time progress feedback
+
+### Changed
+
+- **`SysML: Clear Parse Cache`** enhanced — now flushes server caches (documents, symbol tables, semantic token sets) with reported counts, then re-parses the active file immediately
+- **Model Dashboard** updated with Model Complexity Index display and build timing metrics
+- **ESLint configuration** modernised — flat config format with browser globals for webview JS, Node globals for scripts, vendor files ignored, type-checked TypeScript linting
+
+### Fixed
+
+- **ESLint errors in browser JS** — added proper environment globals for `media/game/`, `media/webview/`, and `scripts/` files; ignored third-party vendor bundles and `.venv` directory
+
 ## [0.21.0]
 
 ### Added

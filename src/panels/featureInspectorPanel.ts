@@ -337,9 +337,11 @@ export class FeatureInspectorPanel {
 </div>`;
         }
 
+        const nonce = _getNonce();
         this._panel.webview.html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
-<style>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+<style nonce="${nonce}">
 ${this._getBaseStyles()}
 
 /* ── Index styles ── */
@@ -361,7 +363,7 @@ ${this._getBaseStyles()}
 <div class="index-header">Model Types</div>
 <div class="index-subtitle">Click any type to inspect it. ${types.length} types available.</div>
 ${sections}
-<script>
+<script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     document.querySelectorAll('.index-item').forEach(el => {
         el.addEventListener('click', () => {
@@ -373,13 +375,16 @@ ${sections}
     }
 
     private _showEmpty(message: string): void {
+        const nonce = _getNonce();
         this._panel.webview.html = `<!DOCTYPE html>
-<html><head><style>
+<html><head>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}';">
+<style nonce="${nonce}">
 body { font-family: var(--vscode-font-family, sans-serif); color: var(--vscode-foreground);
        background: var(--vscode-editor-background); padding: 20px; display: flex;
        align-items: center; justify-content: center; height: 80vh; }
 p { opacity: 0.6; font-style: italic; text-align: center; }
-</style></head><body><p>${message}</p></body></html>`;
+</style></head><body><p>${this._escapeHtml(message)}</p></body></html>`;
     }
 
     private _buildHtml(type: ResolvedTypeDTO): string {
@@ -387,12 +392,14 @@ p { opacity: 0.6; font-style: italic; text-align: center; }
         const featuresTable = this._renderFeaturesTable(type.features);
         const meta = this._renderMeta(type);
         const hasHistory = this._navStack.length > 0;
+        const nonce = _getNonce();
 
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<style>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+<style nonce="${nonce}">
 ${this._getBaseStyles()}
 
 /* ── Navigation bar ── */
@@ -428,7 +435,7 @@ ${meta}
 <div class="section-title" title="Owned features — parts, ports, attributes, references, and other typed features declared within this element">Features (${type.features.length})</div>
 ${featuresTable}
 
-<script>
+<script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
 
     // Back / Index buttons
@@ -658,4 +665,14 @@ ${rows}
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
     }
+}
+
+/** Generate a random nonce for Content Security Policy. */
+function _getNonce(): string {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let nonce = '';
+    for (let i = 0; i < 32; i++) {
+        nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return nonce;
 }

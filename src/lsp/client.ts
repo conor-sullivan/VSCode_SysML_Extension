@@ -15,7 +15,6 @@ import {
     ServerOptions,
     TransportKind,
     WorkDoneProgressBegin,
-    WorkDoneProgressEnd,
 } from 'vscode-languageclient/node';
 import type { SysMLStatusParams } from '../providers/sysmlModelTypes';
 
@@ -76,6 +75,13 @@ export function startLanguageClient(
         outputChannel,
         traceOutputChannel: outputChannel,
 
+        // Tell the server whether a .code-workspace was opened so it
+        // can decide whether to pre-parse workspace files on startup.
+        initializationOptions: {
+            isWorkspaceFile: !!(vscode.workspace.workspaceFile
+                && vscode.workspace.workspaceFile.scheme === 'file'),
+        },
+
         // Disable inlay hints by default — they interfere with renaming
         // and editing identifiers in SysML files.  Users can opt-in via
         // the "sysml.inlayHints.enabled" setting.
@@ -90,31 +96,26 @@ export function startLanguageClient(
                 return next(document, range, token);
             },
 
-            // Guard against stuck "Parsing …" progress indicators.
-            // When a new "Parsing" begin arrives while one is already
-            // active, force-end the old one first.  Also set a safety
-            // timeout to auto-end any token that lingers too long.
+            // Suppress the built-in VS Code "Parsing …" progress
+            // indicator for "Parsing" tokens — our custom animated
+            // status-bar item in extension.ts handles this instead.
+            // We still track the token for timeout-safety but never
+            // forward "Parsing" progress to VS Code's default UI.
             handleWorkDoneProgress: (token, params, next) => {
                 if ('kind' in params && params.kind === 'begin') {
                     const beginParams = params as WorkDoneProgressBegin;
                     if (beginParams.title === 'Parsing') {
-                        // End any previously stuck "Parsing" progress
-                        if (activeParsingToken !== undefined) {
-                            const endMsg: WorkDoneProgressEnd = { kind: 'end' };
-                            next(activeParsingToken, endMsg);
-                        }
+                        // Track this as active parsing token
                         if (parsingTimeoutHandle) {
                             clearTimeout(parsingTimeoutHandle);
                         }
                         activeParsingToken = token;
                         parsingTimeoutHandle = setTimeout(() => {
-                            if (activeParsingToken !== undefined) {
-                                const endMsg: WorkDoneProgressEnd = { kind: 'end' };
-                                next(activeParsingToken, endMsg);
-                                activeParsingToken = undefined;
-                            }
+                            activeParsingToken = undefined;
                             parsingTimeoutHandle = undefined;
                         }, PROGRESS_TIMEOUT_MS);
+                        // Don't forward to VS Code — our animation handles it
+                        return;
                     }
                 } else if ('kind' in params && params.kind === 'end') {
                     if (token === activeParsingToken) {
@@ -123,7 +124,12 @@ export function startLanguageClient(
                             clearTimeout(parsingTimeoutHandle);
                             parsingTimeoutHandle = undefined;
                         }
+                        // Don't forward to VS Code
+                        return;
                     }
+                } else if (token === activeParsingToken) {
+                    // Suppress report/progress for parsing tokens too
+                    return;
                 }
                 next(token, params);
             },

@@ -1,6 +1,8 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 
+const _isUnitTest = (vscode as any)._isMock === true;
+
 suite('Extension Integration Test Suite', () => {
     vscode.window.showInformationMessage('Running Integration tests...');
 
@@ -19,6 +21,7 @@ suite('Extension Integration Test Suite', () => {
     });
 
     test('Commands should be registered', async function() {
+        if (_isUnitTest) { return this.skip(); } // needs real extension activation
         this.timeout(5000);
 
         const commands = await vscode.commands.getCommands(true);
@@ -64,6 +67,7 @@ suite('Extension Integration Test Suite', () => {
     });
 
     test('Document formatting should work', async function() {
+        if (_isUnitTest) { return this.skip(); } // needs real LSP formatting
         this.timeout(15000);
 
         const content = `package Test {
@@ -94,6 +98,7 @@ part def Part1 {
     });
 
     test('Validation should produce diagnostics', async function() {
+        if (_isUnitTest) { return this.skip(); } // needs real LSP diagnostics
         this.timeout(15000);
 
         const content = `package Test {

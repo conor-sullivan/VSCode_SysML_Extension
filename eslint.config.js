@@ -8,6 +8,16 @@ module.exports = [
     files: ['**/*.js', '**/*.ts']
   },
   {
+    files: ['eslint.config.js'],
+    languageOptions: {
+      globals: {
+        module: 'readonly',
+        require: 'readonly',
+        __dirname: 'readonly'
+      }
+    }
+  },
+  {
     files: ['src/**/*.ts'],
     languageOptions: {
       parser: tsParser,
@@ -29,6 +39,8 @@ module.exports = [
         global: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
         AbortSignal: 'readonly',
         AbortController: 'readonly',
         DOMException: 'readonly',
@@ -104,6 +116,65 @@ module.exports = [
     }
   },
   {
+    files: ['media/game/**/*.js', 'media/webview/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2020,
+      sourceType: 'script',
+      globals: {
+        document: 'readonly',
+        window: 'readonly',
+        console: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+        requestAnimationFrame: 'readonly',
+        cancelAnimationFrame: 'readonly',
+        AudioContext: 'readonly',
+        OscillatorNode: 'readonly',
+        GainNode: 'readonly',
+        Element: 'readonly',
+        HTMLElement: 'readonly',
+        HTMLCanvasElement: 'readonly',
+        CanvasRenderingContext2D: 'readonly',
+        Worker: 'readonly',
+        self: 'readonly',
+        importScripts: 'readonly',
+        ELK: 'readonly'
+      }
+    },
+    rules: {
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      'no-var': 'off',
+      'prefer-const': 'off',
+      'prefer-arrow-callback': 'off',
+      'prefer-template': 'off'
+    }
+  },
+  {
+    files: ['scripts/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2020,
+      sourceType: 'script',
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        Buffer: 'readonly',
+        __dirname: 'readonly',
+        __filename: 'readonly',
+        module: 'readonly',
+        require: 'readonly',
+        exports: 'readonly'
+      }
+    },
+    rules: {
+      'no-var': 'off',
+      'prefer-const': 'off',
+      'prefer-arrow-callback': 'off',
+      'prefer-template': 'off'
+    }
+  },
+  {
     ignores: [
       'out/**',
       'node_modules/**',
@@ -111,7 +182,9 @@ module.exports = [
       '**/*.d.ts',
       'dist/**',
       'coverage/**',
-      '*.vsix'
+      '*.vsix',
+      'media/vendor/**',
+      '.venv/**'
     ]
   }
 ];

@@ -1,14 +1,17 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { ModelExplorerProvider } from './explorer/modelExplorerProvider';
+import { FeatureExplorerProvider } from './explorer/featureExplorerProvider';
+import { ModelExplorerProvider, ModelTreeItem } from './explorer/modelExplorerProvider';
+import { SysRunnerPanel } from './game/sysRunnerPanel';
 import { startLanguageClient, stopLanguageClient } from './lsp/client';
 import { FeatureInspectorPanel } from './panels/featureInspectorPanel';
 import { ModelDashboardPanel } from './panels/modelDashboardPanel';
-import { LspModelProvider } from './providers/lspModelProvider';
+import { LspModelProvider, type LspServerStats } from './providers/lspModelProvider';
 import { VisualizationPanel } from './visualization/visualizationPanel';
 
 let modelExplorerProvider: ModelExplorerProvider;
+let featureExplorerProvider: FeatureExplorerProvider;
 let outputChannel: vscode.OutputChannel;
 let lspModelProvider: LspModelProvider;
 
@@ -16,15 +19,25 @@ let parseDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 let activeParseCancel: vscode.CancellationTokenSource | undefined;
 let modelMetricsItem: vscode.StatusBarItem | undefined;
 let parseProgressItem: vscode.StatusBarItem | undefined;
+/** Fingerprint of the last metrics update to avoid redundant refreshes. */
+let lastMetricsKey: string | undefined;
+/** Timer driving the animated building-blocks status bar indicator. */
+let parseAnimTimer: ReturnType<typeof setInterval> | undefined;
+/** Cached LSP server stats for tooltip display. */
+let lastServerStats: LspServerStats | undefined;
+let parseAnimFrame = 0;
+/** Cached args from last updateModelMetrics call for reactive diagnostic refresh. */
+let lastMetricsStats: Parameters<typeof updateModelMetrics>[0] | undefined;
+let lastMetricsUri: vscode.Uri | undefined;
 
 /** Available visualization views — matches the webview's dropdown options */
 const visualizationViews = [
-    { id: 'elk',       label: '◆ General',          description: 'ELK auto-layout diagram' },
-    { id: 'ibd',       label: '▦ Interconnection',  description: 'Internal block diagram' },
-    { id: 'activity',  label: '▶ Activity',         description: 'Activity diagram' },
-    { id: 'state',     label: '⌘ State',            description: 'State machine diagram' },
-    { id: 'sequence',  label: '⇄ Sequence',         description: 'Sequence diagram' },
-    { id: 'usecase',   label: '◎ Case',             description: 'Use case diagram' },
+    { id: 'elk',       label: '◆ General',          description: 'General view with auto-layout' },
+    { id: 'ibd',       label: '▦ Interconnection',  description: 'Interconnection view (parts, ports, connections)' },
+    { id: 'activity',  label: '▶ Activity',         description: 'Activity view (actions and flow)' },
+    { id: 'state',     label: '⌘ State',            description: 'State view (states and transitions)' },
+    { id: 'sequence',  label: '⇄ Sequence',         description: 'Sequence view (interactions)' },
+    { id: 'usecase',   label: '◎ Case',             description: 'Use case view (actors and cases)' },
     { id: 'tree',      label: '▲ Tree',             description: 'Tree layout' },
     { id: 'package',   label: '▤ Package',          description: 'Package diagram' },
     { id: 'graph',     label: '● Graph',            description: 'Force-directed graph' },
@@ -38,7 +51,7 @@ const visualizationViews = [
  *
  * All parsing is performed by the LSP server via `sysml/model` requests.
  */
-function parseSysMLDocument(document: vscode.TextDocument): void {
+function parseSysMLDocument(document: vscode.TextDocument, options?: { skipProgress?: boolean }): void {
     // Cancel any in-flight parse for a previous file
     if (parseDebounceTimer) {
         globalThis.clearTimeout(parseDebounceTimer);
@@ -47,6 +60,15 @@ function parseSysMLDocument(document: vscode.TextDocument): void {
         activeParseCancel.cancel();
         activeParseCancel.dispose();
         activeParseCancel = undefined;
+    }
+
+    // Show the animated progress indicator immediately — before the
+    // debounce timer fires — so the user sees feedback the instant
+    // a SysML file opens, not after the LSP roundtrip.
+    // Skip when re-triggered from notifyServerParseDone (server already done).
+    const fileName = document.fileName.split('/').pop() || 'file';
+    if (!options?.skipProgress) {
+        showParseProgress(fileName);
     }
 
     const cancelSource = new vscode.CancellationTokenSource();
@@ -68,12 +90,23 @@ function parseSysMLDocument(document: vscode.TextDocument): void {
             const fileName = document.fileName.split('/').pop() || 'file';
             outputChannel?.appendLine(`parseSysMLDocument: loading ${fileName} (LSP)`);
             try {
-                await modelExplorerProvider.loadDocument(document, cancelSource.token);
+                if (modelExplorerProvider.isWorkspaceMode()) {
+                    // Workspace mode: keep the full workspace model and
+                    // just reveal/expand the node for the active file.
+                    await modelExplorerProvider.revealActiveDocument(document.uri);
+                } else {
+                    await modelExplorerProvider.loadDocument(document, cancelSource.token);
+                }
             } catch {
                 // Model explorer failure is non-critical — continue to
                 // update the visualizer so it always gets a chance to
                 // fetch fresh data from the LSP server.
             }
+
+            // Parsing is done — hide the animated progress bar now,
+            // before the secondary UI updates (metrics, feature inspector,
+            // visualization) which can add noticeable latency.
+            hideParseProgress();
 
             // Bail out if cancelled or closed during model explorer parse
             if (cancelSource.token.isCancellationRequested || document.isClosed) {
@@ -84,22 +117,33 @@ function parseSysMLDocument(document: vscode.TextDocument): void {
             // --- Status-bar model metrics ---
             const stats = modelExplorerProvider.getLastStats();
             if (stats) {
+                // Fetch LSP server health info (non-blocking, best-effort)
+                try {
+                    lastServerStats = await lspModelProvider.getServerStats();
+                } catch { /* non-critical */ }
                 updateModelMetrics(stats, document.uri);
             }
 
-            // Push resolved types to Feature Inspector if it's open
-            if (FeatureInspectorPanel.currentPanel && lspModelProvider) {
+            // Push resolved types to Feature Inspector and Feature Explorer
+            if ((FeatureInspectorPanel.currentPanel || featureExplorerProvider) && lspModelProvider) {
                 try {
                     const typeResult = await lspModelProvider.getModel(
                         document.uri.toString(), ['resolvedTypes'], cancelSource.token,
                     );
                     if (typeResult.resolvedTypes) {
-                        FeatureInspectorPanel.currentPanel.updateResolvedTypes(
-                            typeResult.resolvedTypes, document.uri.toString(),
-                        );
+                        if (FeatureInspectorPanel.currentPanel) {
+                            FeatureInspectorPanel.currentPanel.updateResolvedTypes(
+                                typeResult.resolvedTypes, document.uri.toString(),
+                            );
+                        }
+                        if (featureExplorerProvider) {
+                            featureExplorerProvider.pushResolvedTypes(
+                                document.uri.toString(), typeResult.resolvedTypes,
+                            );
+                        }
                     }
                 } catch {
-                    // Non-critical — inspector will fetch on next cursor move
+                    // Non-critical — inspector/explorer will fetch on next interaction
                 }
             }
 
@@ -117,6 +161,9 @@ function parseSysMLDocument(document: vscode.TextDocument): void {
                 activeParseCancel = undefined;
             }
             cancelSource.dispose();
+            // Safety net: ensure the indicator is hidden even if an
+            // early return or exception skipped the inline call above.
+            hideParseProgress();
         }
     }, 300);
 }
@@ -136,16 +183,26 @@ export function updateModelMetrics(stats: {
     resolvedElements: number;
     unresolvedElements: number;
     parseTimeMs: number;
+    lexTimeMs?: number;
+    parseOnlyTimeMs?: number;
+    parseCached?: boolean;
     modelBuildTimeMs: number;
+    complexity?: {
+        complexityIndex: number;
+        rating: string;
+        definitions: number;
+        usages: number;
+        maxDepth: number;
+        avgChildrenPerDef: number;
+        couplingCount: number;
+        unusedDefinitions: number;
+        documentationCoverage: number;
+        hotspots: { qualifiedName: string; kind: string; childCount: number; depth: number; typeRefs: number; hasDoc: boolean; score: number }[];
+    };
 }, documentUri?: vscode.Uri): void {
-    if (!modelMetricsItem) {
-        modelMetricsItem = vscode.window.createStatusBarItem(
-            vscode.StatusBarAlignment.Right, 100
-        );
-        modelMetricsItem.name = 'SysML Model Metrics';
-        // Click opens the Problems panel so users can see actionable issues
-        modelMetricsItem.command = 'workbench.actions.view.problems';
-    }
+    // Cache latest args so the diagnostic-change listener can re-call us.
+    lastMetricsStats = stats;
+    lastMetricsUri = documentUri;
 
     // Count real diagnostics (errors/warnings) for the current file
     const diagnostics = documentUri
@@ -155,17 +212,84 @@ export function updateModelMetrics(stats: {
     const warnCount = diagnostics.filter(d => d.severity === vscode.DiagnosticSeverity.Warning).length;
     const issueCount = errorCount + warnCount;
 
+    // Deduplicate: skip if stats + document + diagnostics haven't changed
+    const metricsKey = `${documentUri?.toString() ?? ''}|${stats.totalElements}|${stats.resolvedElements}|${stats.unresolvedElements}|${stats.parseTimeMs}|${stats.modelBuildTimeMs}|${stats.complexity?.complexityIndex ?? ''}|${errorCount}|${warnCount}`;
+    if (metricsKey === lastMetricsKey) {
+        return;
+    }
+    lastMetricsKey = metricsKey;
+
+    if (!modelMetricsItem) {
+        modelMetricsItem = vscode.window.createStatusBarItem(
+            vscode.StatusBarAlignment.Right, 100
+        );
+        modelMetricsItem.name = 'SysML Model Metrics';
+        // Click opens the Problems panel so users can see actionable issues
+        modelMetricsItem.command = 'workbench.actions.view.problems';
+    }
+
     // Icon reflects actual problems, not type-resolution status
     const icon = errorCount > 0 ? '$(error)' : warnCount > 0 ? '$(warning)' : '$(check)';
     const issuesSuffix = issueCount > 0 ? ` | $(alert) ${issueCount}` : '';
-    modelMetricsItem.text = `${icon} SysML: ${stats.totalElements} elements${issuesSuffix} | ${stats.parseTimeMs}ms`;
 
-    const tooltipLines = [
-        `Total elements: ${stats.totalElements}`,
-        `Typed: ${stats.resolvedElements}`,
-        `Un-typed: ${stats.unresolvedElements} (packages, definitions — normal)`,
-        `Parse time: ${stats.parseTimeMs}ms`,
-    ];
+    // Complexity badge
+    const cx = stats.complexity;
+    const complexitySuffix = cx ? ` | MCI ${cx.complexityIndex}` : '';
+    modelMetricsItem.text = `${icon} SysML: ${stats.totalElements} elements${issuesSuffix}${complexitySuffix} | ${stats.parseTimeMs}ms`;
+
+    const totalTimeMs = stats.parseTimeMs + stats.modelBuildTimeMs;
+
+    const tooltipLines: string[] = [];
+
+    // File name
+    if (documentUri) {
+        tooltipLines.push(`📄 ${documentUri.path.split('/').pop()}`);
+        tooltipLines.push('');
+    }
+
+    // Element summary
+    tooltipLines.push(`── Elements ──`);
+    tooltipLines.push(`Total: ${stats.totalElements}`);
+    tooltipLines.push(`Typed: ${stats.resolvedElements}  |  Un-typed: ${stats.unresolvedElements}`);
+
+    // Parse timing breakdown
+    const cachedLabel = stats.parseCached ? ' (Cached)' : '';
+    tooltipLines.push('');
+    tooltipLines.push(`── Parse Details${cachedLabel} ──`);
+    if (stats.lexTimeMs !== undefined) {
+        tooltipLines.push(`Lex:   ${stats.lexTimeMs}ms`);
+    }
+    if (stats.parseOnlyTimeMs !== undefined) {
+        tooltipLines.push(`Parse: ${stats.parseOnlyTimeMs}ms`);
+    }
+    tooltipLines.push(`Build: ${stats.modelBuildTimeMs}ms`);
+    tooltipLines.push(`Total: ${totalTimeMs}ms`);
+
+    // Model Complexity Index
+    if (cx) {
+        tooltipLines.push('');
+        tooltipLines.push(`── Model Complexity Index ──`);
+        tooltipLines.push(`Score: ${cx.complexityIndex} / 100  (${cx.rating})`);
+        tooltipLines.push(`Definitions: ${cx.definitions}  |  Usages: ${cx.usages}`);
+        tooltipLines.push(`Max depth: ${cx.maxDepth}  |  Coupling: ${cx.couplingCount}`);
+        tooltipLines.push(`Unused definitions: ${cx.unusedDefinitions}`);
+        tooltipLines.push(`Documentation coverage: ${cx.documentationCoverage}%`);
+    }
+
+    // LSP server health
+    if (lastServerStats) {
+        const s = lastServerStats;
+        const uptimeStr = s.uptime >= 60
+            ? `${Math.floor(s.uptime / 60)}m ${s.uptime % 60}s`
+            : `${s.uptime}s`;
+        tooltipLines.push('');
+        tooltipLines.push(`── LSP Health ──`);
+        tooltipLines.push(`Uptime: ${uptimeStr}`);
+        tooltipLines.push(`Heap: ${s.memory.heapUsed} / ${s.memory.heapTotal} MB  |  RSS: ${s.memory.rss} MB`);
+        tooltipLines.push(`Caches: ${s.caches.documents} docs, ${s.caches.symbolTables} STs, ${s.caches.semanticTokens} tokens`);
+    }
+
+    // Diagnostics
     if (issueCount > 0) {
         tooltipLines.push('');
         tooltipLines.push(`${errorCount} error(s), ${warnCount} warning(s)`);
@@ -185,21 +309,61 @@ export function updateModelMetrics(stats: {
 /** Hide the model-metrics status bar item (e.g. when no SysML file is open). */
 export function hideModelMetrics(): void {
     modelMetricsItem?.hide();
+    lastMetricsKey = undefined;
 }
 
 /**
- * Show a "Parsing …" indicator in the status bar while the LSP
- * server is processing a file.  Called from `client.ts` when the
- * server sends `sysml/status` `begin` / `progress` notifications.
+ * Animated building-blocks frames for the status bar indicator.
+ * Each frame shows blocks assembling into a model, giving a visual
+ * sense of progress while the LSP server parses.
+ */
+const PARSE_FRAMES = [
+    '$(symbol-structure) ░░░░ Assembling model',
+    '$(symbol-structure) █░░░ Assembling model',
+    '$(symbol-structure) ██░░ Assembling model',
+    '$(symbol-structure) ███░ Assembling model',
+    '$(symbol-structure) ████ Assembling model',
+    '$(symbol-structure) ▪▫▫▫ Building blocks',
+    '$(symbol-structure) ▪▪▫▫ Building blocks',
+    '$(symbol-structure) ▪▪▪▫ Building blocks',
+    '$(symbol-structure) ▪▪▪▪ Building blocks',
+    '$(symbol-structure) ◧◧◧◧ Linking elements',
+    '$(symbol-structure) ◨◧◧◧ Linking elements',
+    '$(symbol-structure) ◨◨◧◧ Linking elements',
+    '$(symbol-structure) ◨◨◨◧ Linking elements',
+    '$(symbol-structure) ◨◨◨◨ Linking elements',
+];
+
+/**
+ * Show an animated "building blocks" indicator in the status bar
+ * while the LSP server is processing a file.
+ *
+ * Called eagerly from `parseSysMLDocument()` the instant a SysML file
+ * is opened (before the debounce), and again from `client.ts` when
+ * the server sends `sysml/status` `begin` / `progress` notifications.
  */
 export function showParseProgress(label: string): void {
     if (!parseProgressItem) {
         parseProgressItem = vscode.window.createStatusBarItem(
-            vscode.StatusBarAlignment.Left, 50,
+            vscode.StatusBarAlignment.Left, 0,
         );
         parseProgressItem.name = 'SysML Parse Progress';
     }
-    parseProgressItem.text = `$(sync~spin) Parsing ${label}…`;
+
+    // Start the frame animation if not already running
+    if (!parseAnimTimer) {
+        parseAnimFrame = 0;
+        parseAnimTimer = setInterval(() => {
+            parseAnimFrame = (parseAnimFrame + 1) % PARSE_FRAMES.length;
+            if (parseProgressItem) {
+                const suffix = label ? ` · ${label}` : '';
+                parseProgressItem.text = `${PARSE_FRAMES[parseAnimFrame]}${suffix}`;
+            }
+        }, 220);
+    }
+
+    const suffix = label ? ` · ${label}` : '';
+    parseProgressItem.text = `${PARSE_FRAMES[parseAnimFrame]}${suffix}`;
     parseProgressItem.show();
 }
 
@@ -208,6 +372,10 @@ export function showParseProgress(label: string): void {
  * when the server sends `sysml/status` `end`.
  */
 export function hideParseProgress(): void {
+    if (parseAnimTimer) {
+        clearInterval(parseAnimTimer);
+        parseAnimTimer = undefined;
+    }
     parseProgressItem?.hide();
 }
 
@@ -235,7 +403,7 @@ export function notifyServerParseDone(uri?: string): void {
     }
     if (target) {
         outputChannel?.appendLine(`notifyServerParseDone: re-parsing ${target.fileName.split('/').pop()}`);
-        parseSysMLDocument(target);
+        parseSysMLDocument(target, { skipProgress: true });
 
         // Also notify the visualizer directly — the server has finished
         // parsing so sysml/model will return fresh data.  This avoids
@@ -254,26 +422,10 @@ export function activate(context: vscode.ExtensionContext) {
     outputChannel.appendLine('SysML v2.0 extension is now active');
     outputChannel.show(true);  // Auto-show so the user can see LSP status
 
-    // ─── LSP Client ────────────────────────────────────────────────
-    // The language server (sysml-v2-lsp) provides all core language
-    // features: diagnostics, completions, hover, go-to-definition,
-    // references, rename, formatting, code actions, semantic tokens,
-    // CodeLens, inlay hints, document symbols, folding ranges, etc.
-    const client = startLanguageClient(context, outputChannel);
-
-    // ─── LSP Model Provider ───────────────────────────────────────
-    // The model explorer and visualization panels query the LSP
-    // server's `sysml/model` custom request.  All parsing is handled
-    // by the language server — no extension-side parser.
-    lspModelProvider = new LspModelProvider(client);
-    outputChannel.appendLine('LSP model provider initialised');
-
-    // ─── MCP Server ────────────────────────────────────────────────
-    // Register the sysml-v2-lsp MCP server so Copilot / agent mode
-    // can discover SysML tools, resources, and prompts.
-    // NOTE: We resolve the path directly rather than require('sysml-v2-lsp')
-    // because the upstream package's "main" field points to a non-existent
-    // file, causing CJS require to fail even though "exports" is correct.
+    // ─── MCP Server (register FIRST — independent of LSP) ─────────
+    // The MCP server is a standalone stdio process that doesn't need
+    // the LSP client.  Register it early so Copilot / agent mode can
+    // discover SysML tools even before a .sysml file is opened.
     const mcpServerPath = path.join(
         context.extensionPath, 'node_modules', 'sysml-v2-lsp',
         'dist', 'server', 'mcpServer.mjs'
@@ -298,9 +450,63 @@ export function activate(context: vscode.ExtensionContext) {
         outputChannel.appendLine(`Warning: MCP server not found at ${mcpServerPath}`);
     }
 
+    // ─── LSP Client ────────────────────────────────────────────────
+    // The language server (sysml-v2-lsp) provides all core language
+    // features: diagnostics, completions, hover, go-to-definition,
+    // references, rename, formatting, code actions, semantic tokens,
+    // CodeLens, inlay hints, document symbols, folding ranges, etc.
+    const client = startLanguageClient(context, outputChannel);
+
+    // ─── LSP Model Provider ───────────────────────────────────────
+    // The model explorer and visualization panels query the LSP
+    // server's `sysml/model` custom request.  All parsing is handled
+    // by the language server — no extension-side parser.
+    lspModelProvider = new LspModelProvider(client);
+    outputChannel.appendLine('LSP model provider initialised');
+
     // ─── Model Explorer ────────────────────────────────────────────
     modelExplorerProvider = new ModelExplorerProvider(lspModelProvider);
-    vscode.window.registerTreeDataProvider('sysmlModelExplorer', modelExplorerProvider);
+    const modelExplorerTreeView = vscode.window.createTreeView('sysmlModelExplorer', {
+        treeDataProvider: modelExplorerProvider,
+    });
+    modelExplorerProvider.setTreeView(modelExplorerTreeView);
+    context.subscriptions.push(modelExplorerTreeView);
+    // Set the initial workspace view mode context for menu icons
+    vscode.commands.executeCommand('setContext', 'sysml.workspaceViewMode', modelExplorerProvider.getWorkspaceViewMode());
+
+    // ─── Feature Explorer (linked detail view) ─────────────────────
+    featureExplorerProvider = new FeatureExplorerProvider(lspModelProvider);
+    const featureExplorerTreeView = vscode.window.createTreeView('sysmlFeatureExplorer', {
+        treeDataProvider: featureExplorerProvider,
+    });
+    context.subscriptions.push(featureExplorerTreeView);
+
+    // Master-detail: when user selects a definition in Model Explorer,
+    // populate the Feature Explorer with its resolved type info.
+    context.subscriptions.push(
+        modelExplorerTreeView.onDidChangeSelection(async (e) => {
+            const selected = e.selection[0];
+            if (selected && (selected as ModelTreeItem).itemType === 'sysml-element') {
+                const treeItem = selected as ModelTreeItem;
+                const el = treeItem.element;
+                // Only show details for definition-like elements
+                const defTypes = new Set([
+                    'part def', 'item def', 'port def', 'action def',
+                    'state def', 'constraint def', 'requirement def',
+                    'use case def', 'enum def', 'datatype', 'package',
+                    'part', 'port', 'action', 'state', 'attribute',
+                    'item', 'reference', 'connection', 'interface',
+                ]);
+                if (defTypes.has(el.type)) {
+                    // Collect all known elements for where-used lookup
+                    const allElements = modelExplorerProvider.getAllElements();
+                    await featureExplorerProvider.selectElement(
+                        el, treeItem.elementUri, allElements,
+                    );
+                }
+            }
+        })
+    );
 
     // ─── Commands ──────────────────────────────────────────────────
 
@@ -328,8 +534,15 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('sysml.showVisualizer', async () => {
-            const editor = vscode.window.activeTextEditor;
-            if (editor && editor.document.languageId === 'sysml') {
+            // Prefer the active editor, but fall back to any visible
+            // SysML editor (e.g. when focus is in the Output panel).
+            let editor = vscode.window.activeTextEditor;
+            if (!editor || editor.document.languageId !== 'sysml') {
+                editor = vscode.window.visibleTextEditors.find(
+                    e => e.document.languageId === 'sysml' && !e.document.isClosed,
+                );
+            }
+            if (editor) {
                 VisualizationPanel.createOrShow(context.extensionUri, editor.document, undefined, lspModelProvider);
             }
         })
@@ -342,10 +555,143 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Visualize a specific package from the Model Explorer context menu
     context.subscriptions.push(
-        vscode.commands.registerCommand('sysml.clearCache', () => {
-            vscode.window.showInformationMessage('SysML cache cleared');
-            outputChannel.appendLine('[Cache] Cleared');
+        vscode.commands.registerCommand('sysml.visualizePackage', async (treeItem: ModelTreeItem) => {
+            if (!treeItem || !treeItem.element || treeItem.element.type !== 'package') {
+                return;
+            }
+
+            const packageName = treeItem.element.name;
+            const fileUri = treeItem.elementUri;
+
+            // In workspace mode, pass all workspace file URIs so the
+            // visualizer loads every package — not just the one file.
+            const isWorkspace = modelExplorerProvider.isWorkspaceMode();
+            const workspaceUris = isWorkspace ? modelExplorerProvider.getWorkspaceFileUris() : undefined;
+
+            // Open the file to get a TextDocument for the visualizer
+            const document = await vscode.workspace.openTextDocument(fileUri);
+
+            // Build a combined document proxy when in workspace mode so
+            // the visualizer sees all files (mirrors sysml.visualizeFolder logic).
+            if (isWorkspace && workspaceUris && workspaceUris.length > 1) {
+                const openDocs: vscode.TextDocument[] = [];
+                let combinedContent = '';
+                const fileNames: string[] = [];
+
+                for (const uri of workspaceUris) {
+                    try {
+                        const doc = await vscode.workspace.openTextDocument(uri);
+                        openDocs.push(doc);
+                        const fileName = uri.fsPath.substring(uri.fsPath.lastIndexOf('/') + 1);
+                        fileNames.push(fileName);
+                        combinedContent += `// === ${fileName} ===\n`;
+                        combinedContent += doc.getText();
+                        combinedContent += '\n\n';
+                    } catch { /* skip unreadable files */ }
+                }
+
+                if (openDocs.length > 0) {
+                    const firstDoc = openDocs[0];
+                    const combinedDocumentProxy = {
+                        getText: () => combinedContent,
+                        uri: firstDoc.uri,
+                        languageId: 'sysml',
+                        version: firstDoc.version,
+                        lineCount: combinedContent.split('\n').length,
+                        lineAt: (line: number) => firstDoc.lineAt(Math.min(line, firstDoc.lineCount - 1)),
+                        offsetAt: (position: vscode.Position) => firstDoc.offsetAt(position),
+                        positionAt: (offset: number) => firstDoc.positionAt(offset),
+                        getWordRangeAtPosition: (position: vscode.Position) => firstDoc.getWordRangeAtPosition(position),
+                        validateRange: (range: vscode.Range) => firstDoc.validateRange(range),
+                        validatePosition: (position: vscode.Position) => firstDoc.validatePosition(position),
+                        fileName: firstDoc.fileName,
+                        isUntitled: false,
+                        isDirty: false,
+                        isClosed: false,
+                        eol: firstDoc.eol,
+                        encoding: 'utf8',
+                        save: () => Promise.resolve(false)
+                    } as unknown as vscode.TextDocument;
+
+                    const title = `SysML Visualization - ${fileNames.length} file(s)`;
+                    VisualizationPanel.createOrShow(context.extensionUri, combinedDocumentProxy, title, lspModelProvider, workspaceUris);
+
+                    // Select the specific package once data loads
+                    setTimeout(() => {
+                        if (VisualizationPanel.currentPanel) {
+                            VisualizationPanel.currentPanel.selectPackage(packageName);
+                        }
+                    }, 500);
+                    return;
+                }
+            }
+
+            // Single-file fallback
+            VisualizationPanel.createOrShow(context.extensionUri, document, undefined, lspModelProvider);
+
+            // Wait briefly for the panel to initialise and data to load, then select the package
+            setTimeout(() => {
+                if (VisualizationPanel.currentPanel) {
+                    VisualizationPanel.currentPanel.selectPackage(packageName);
+                }
+            }, 500);
+        })
+    );
+
+    // Set initial context so the toggle button is only shown when a
+    // multi-root or .code-workspace workspace is open.
+    vscode.commands.executeCommand(
+        'setContext',
+        'sysml.hasWorkspace',
+        vscode.workspace.workspaceFile !== undefined,
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('sysml.toggleModelExplorerViewMode', () => {
+            if (!vscode.workspace.workspaceFile) {
+                // Not a workspace — toggle is disabled but guard anyway
+                return;
+            }
+            modelExplorerProvider.toggleWorkspaceViewMode();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('sysml.switchToFileView', () => {
+            modelExplorerProvider.setWorkspaceViewMode('byFile');
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('sysml.switchToSemanticView', () => {
+            modelExplorerProvider.setWorkspaceViewMode('bySemantic');
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('sysml.clearCache', async () => {
+            const result = await lspModelProvider.clearServerCaches();
+            if (result) {
+                const total = result.documents + result.symbolTables + result.semanticTokens;
+                vscode.window.showInformationMessage(
+                    `SysML: Flushed ${total} cache entries (${result.documents} docs, ${result.symbolTables} STs, ${result.semanticTokens} tokens)`,
+                );
+                outputChannel.appendLine(
+                    `[Cache] Cleared — ${result.documents} docs, ${result.symbolTables} symbol tables, ${result.semanticTokens} token sets`,
+                );
+            } else {
+                vscode.window.showWarningMessage('SysML: LSP server did not respond — cache not cleared');
+                outputChannel.appendLine('[Cache] Clear failed — LSP not reachable');
+                return;
+            }
+
+            // Re-parse the active SysML file so the UI refreshes immediately
+            const editor = vscode.window.activeTextEditor;
+            if (editor && editor.document.languageId === 'sysml') {
+                parseSysMLDocument(editor.document);
+            }
         })
     );
 
@@ -645,11 +991,15 @@ export function activate(context: vscode.ExtensionContext) {
     // ─── Model Dashboard ────────────────────────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('sysml.showModelDashboard', async (fileUri?: vscode.Uri) => {
-            // When invoked from the file explorer, open the file first
-            if (fileUri) {
-                await vscode.window.showTextDocument(fileUri, { preview: false });
-            }
-            ModelDashboardPanel.createOrShow(context.extensionUri, lspModelProvider);
+            ModelDashboardPanel.createOrShow(context.extensionUri, lspModelProvider, fileUri);
+        })
+    );
+
+    // ─── SysML World Game ──────────────────────────────────────────
+    // Completely isolated retro game that teaches SysML v2 concepts.
+    context.subscriptions.push(
+        vscode.commands.registerCommand('sysml.showSysRunner', () => {
+            SysRunnerPanel.createOrShow(context.extensionUri);
         })
     );
 
@@ -702,6 +1052,39 @@ export function activate(context: vscode.ExtensionContext) {
         return false;
     }
 
+    /**
+     * Scan the workspace for all .sysml files and:
+     * 1. Open them so the LSP server receives textDocument/didOpen for each
+     * 2. Load the workspace-wide model into the Model Explorer.
+     * 3. If a SysML file is currently active, reveal its elements.
+     */
+    async function loadWorkspaceSysMLFiles(): Promise<void> {
+        const files = await vscode.workspace.findFiles('**/*.sysml', '**/node_modules/**');
+        if (files.length === 0) return;
+
+        outputChannel.appendLine(`[workspace] Found ${files.length} SysML files — auto-parsing`);
+        vscode.commands.executeCommand('setContext', 'sysml.modelLoaded', true);
+
+        // Open each file so the LSP server receives didOpen and parses it
+        for (const file of files) {
+            try {
+                await vscode.workspace.openTextDocument(file);
+            } catch {
+                // skip unreadable files
+            }
+        }
+
+        // Always load the workspace-wide model so every file is visible
+        outputChannel.appendLine('[workspace] Loading workspace model');
+        await modelExplorerProvider.loadWorkspaceModel(files);
+
+        // If a SysML editor is active, reveal its package in the tree
+        const editor = vscode.window.activeTextEditor;
+        if (editor && editor.document.languageId === 'sysml') {
+            await modelExplorerProvider.revealActiveDocument(editor.document.uri);
+        }
+    }
+
     const activeEditor = vscode.window.activeTextEditor;
     outputChannel.appendLine(`Active editor on activation: ${activeEditor ? activeEditor.document.fileName : 'none'}`);
     outputChannel.appendLine(`Language ID: ${activeEditor?.document.languageId ?? 'N/A'}`);
@@ -721,12 +1104,23 @@ export function activate(context: vscode.ExtensionContext) {
         }, retryDelays[Math.min(retryIndex, retryDelays.length - 1)]);
     }
 
+    // Auto-scan all workspace .sysml files once the LSP server is ready,
+    // but only when a .code-workspace is open.  Plain folders may contain
+    // thousands of files and scanning them eagerly would be too slow.
+    if (vscode.workspace.workspaceFile) {
+        setTimeout(() => loadWorkspaceSysMLFiles(), 3000);
+    }
+
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(editor => {
             outputChannel.appendLine(`onDidChangeActiveTextEditor: ${editor ? editor.document.fileName : 'none'} (lang: ${editor?.document.languageId ?? 'N/A'})`);
             if (editor && editor.document.languageId === 'sysml') {
                 vscode.commands.executeCommand('setContext', 'sysml.modelLoaded', true);
                 parseSysMLDocument(editor.document);
+            } else if (vscode.workspace.workspaceFile && !modelExplorerProvider.isWorkspaceMode()) {
+                // No SysML file active and workspace model not yet loaded —
+                // show the workspace-wide model (only when a .code-workspace is open)
+                loadWorkspaceSysMLFiles();
             }
         })
     );
@@ -750,15 +1144,32 @@ export function activate(context: vscode.ExtensionContext) {
                     activeParseCancel = undefined;
                 }
 
+                // Clear the "Parsing …" status bar immediately — the
+                // server may never send sysml/status end for a closed file.
+                hideParseProgress();
+
                 // Check if any SysML files remain open
                 const remainingSysmlEditors = vscode.window.visibleTextEditors.filter(
                     e => e.document.languageId === 'sysml' && !e.document.isClosed && e.document !== document
                 );
                 if (remainingSysmlEditors.length === 0) {
-                    outputChannel.appendLine('onDidCloseTextDocument: no SysML files open, clearing Model Explorer');
-                    vscode.commands.executeCommand('setContext', 'sysml.modelLoaded', false);
-                    modelExplorerProvider.clear();
+                    // Hide the metrics status bar — no SysML file is active
                     hideModelMetrics();
+
+                    // Show the workspace-wide model if a .code-workspace is
+                    // open, otherwise clear both explorers.
+                    if (vscode.workspace.workspaceFile) {
+                        outputChannel.appendLine('onDidCloseTextDocument: no SysML files open, showing workspace model');
+                        loadWorkspaceSysMLFiles();
+                    } else {
+                        outputChannel.appendLine('onDidCloseTextDocument: no SysML files open, clearing explorers');
+                        modelExplorerProvider.clear();
+                        vscode.commands.executeCommand('setContext', 'sysml.modelLoaded', false);
+                    }
+                    // Always clear the Feature Explorer when no SysML editors remain
+                    if (featureExplorerProvider) {
+                        featureExplorerProvider.clear();
+                    }
                 }
             }
         })
@@ -770,6 +1181,21 @@ export function activate(context: vscode.ExtensionContext) {
                 // Re-parse for model explorer / visualization only.
                 // Language features are handled by the LSP server.
                 parseSysMLDocument(event.document);
+            }
+        })
+    );
+
+    // React to diagnostic changes (e.g. LSP validation results) so
+    // the status bar icon/colour updates without needing a re-parse.
+    context.subscriptions.push(
+        vscode.languages.onDidChangeDiagnostics(event => {
+            if (!lastMetricsStats || !lastMetricsUri) return;
+            const uri = lastMetricsUri;
+            const affected = event.uris.some(u => u.toString() === uri.toString());
+            if (affected) {
+                // Clear the dedup key so updateModelMetrics re-evaluates
+                lastMetricsKey = undefined;
+                updateModelMetrics(lastMetricsStats, lastMetricsUri);
             }
         })
     );
@@ -843,6 +1269,9 @@ export function deactivate(): PromiseLike<void> | undefined {
     }
     if (ModelDashboardPanel.currentPanel) {
         ModelDashboardPanel.currentPanel.dispose();
+    }
+    if (SysRunnerPanel.currentPanel) {
+        SysRunnerPanel.currentPanel.dispose();
     }
 
     // Stop the language server

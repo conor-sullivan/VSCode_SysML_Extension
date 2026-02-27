@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { LspModelProvider, toVscodeRange } from '../providers/lspModelProvider';
 import type { SysMLElementDTO } from '../providers/sysmlModelTypes';
@@ -16,6 +17,8 @@ export class VisualizationPanel {
     private _needsUpdateWhenVisible: boolean = false; // Deferred update when panel is hidden
     private _lastViewColumn: vscode.ViewColumn | undefined; // Track view column to detect panel moves
     private _fileUris: vscode.Uri[] = []; // All source file URIs (for folder-level visualization)
+    private _extensionVersion: string = '';
+    private _pendingPackageName: string | undefined; // Package to select when data arrives
 
     private constructor(
         panel: vscode.WebviewPanel,
@@ -27,6 +30,7 @@ export class VisualizationPanel {
         fileUris?: vscode.Uri[],
     ) {
         this._fileUris = fileUris ?? [];
+        this._extensionVersion = vscode.extensions.getExtension('JamieD.sysml-v2-support')?.packageJSON?.version ?? '0.0.0';
         this._panel = panel;
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
@@ -73,15 +77,41 @@ export class VisualizationPanel {
                         break;
                     case 'executeCommand':
                         if (message.args && message.args.length > 0) {
-                            // Execute command asynchronously with a small delay to ensure webview context is ready
-                            setTimeout(() => {
-                                vscode.commands.executeCommand(message.args[0]);
-                            }, 100);
+                            const cmd = message.args[0];
+                            const allowedCommands = [
+                                'sysml.showModelDashboard',
+                                'sysml.showSysRunner',
+                            ];
+                            if (!allowedCommands.includes(cmd)) {
+                                // eslint-disable-next-line no-console
+                                console.warn(`[SysML Visualizer] Blocked disallowed command: ${cmd}`);
+                                break;
+                            }
+                            if (cmd === 'sysml.showModelDashboard') {
+                                // Pass a file URI so the dashboard can load data
+                                // even when no text editor is active (webview is focused).
+                                const dashboardUri = this._fileUris.length > 0
+                                    ? this._fileUris[0]
+                                    : this._document.uri;
+                                setTimeout(() => {
+                                    vscode.commands.executeCommand(cmd, dashboardUri);
+                                }, 100);
+                            } else {
+                                const cmdArgs = message.args.slice(1);
+                                setTimeout(() => {
+                                    vscode.commands.executeCommand(cmd, ...cmdArgs);
+                                }, 100);
+                            }
                         }
                         break;
                     case 'viewChanged':
                         // Store the current view state when it changes
                         this._currentView = message.view;
+                        break;
+                    case 'openExternal':
+                        if (message.url) {
+                            vscode.env.openExternal(vscode.Uri.parse(message.url));
+                        }
                         break;
                     case 'currentViewResponse':
                         // Update our stored view state with the current webview state
@@ -154,8 +184,7 @@ export class VisualizationPanel {
                 enableScripts: true,
                 retainContextWhenHidden: true,
                 localResourceRoots: [
-                    vscode.Uri.joinPath(extensionUri, 'media'),
-                    extensionUri
+                    vscode.Uri.joinPath(extensionUri, 'media')
                 ]
             }
         );
@@ -240,18 +269,28 @@ export class VisualizationPanel {
                 if (result.activityDiagrams) { allActivityDiagrams.push(...(result.activityDiagrams as unknown[])); }
             }
 
+            // SysML v2 allows the same package to be declared across multiple
+            // files — their members merge into a single namespace.  Coalesce
+            // same-named package DTOs so the webview sees one unified tree.
+            const mergedElements = VisualizationPanel.mergeElementDTOs(allElements);
+
             // DTOs are already plain JSON — convert elements to the
             // shape the webview expects (add id / properties / typing).
-            const jsonElements = this.convertDTOElementsToJSON(allElements);
+            const jsonElements = this.convertDTOElementsToJSON(mergedElements);
 
-            this._panel.webview.postMessage({
+            const msg: Record<string, unknown> = {
                 command: 'update',
                 elements: jsonElements,
                 relationships: allRelationships,
                 sequenceDiagrams: allSequenceDiagrams,
                 activityDiagrams: allActivityDiagrams,
                 currentView: this._currentView,
-            });
+            };
+            if (this._pendingPackageName) {
+                msg.pendingPackageName = this._pendingPackageName;
+                this._pendingPackageName = undefined;
+            }
+            this._panel.webview.postMessage(msg);
         } catch { /* LSP model request failed — silently ignore */ }
     }
 
@@ -277,12 +316,15 @@ export class VisualizationPanel {
 
             // Resolve typing the same way the ANTLR parser does:
             //   1. partType / portType attribute (set by the LSP server)
-            //   2. First 'typing' relationship target
-            const typing: string | undefined =
+            //   2. 'typing' relationship targets
+            const attrType =
                 (attrs['partType'] as string | undefined) ??
-                (attrs['portType'] as string | undefined) ??
-                rels.find(r => r.type === 'typing')?.target ??
-                undefined;
+                (attrs['portType'] as string | undefined);
+            // Collect ALL typing targets (comma-separated attrs OR relationship list)
+            const typingTargets: string[] = attrType
+                ? attrType.split(',').map(s => s.trim()).filter(Boolean)
+                : rels.filter(r => r.type === 'typing').map(r => r.target);
+            const typing: string | undefined = typingTargets[0] ?? undefined;
 
             return {
                 name: el.name,
@@ -291,6 +333,7 @@ export class VisualizationPanel {
                 attributes: attrs,
                 properties: {},
                 typing,
+                typings: typingTargets,
                 children: this.convertDTOElementsToJSON(el.children ?? [], el.name),
                 relationships: rels.map(r => ({
                     type: r.type,
@@ -299,6 +342,69 @@ export class VisualizationPanel {
                 })),
             };
         });
+    }
+
+    /**
+     * Merge same-named package DTOs so that packages declared across
+     * multiple files appear as a single node with combined children.
+     */
+    private static mergeElementDTOs(elements: SysMLElementDTO[]): SysMLElementDTO[] {
+        const mergedMap = new Map<string, SysMLElementDTO>();
+        const result: SysMLElementDTO[] = [];
+
+        for (const el of elements) {
+            const key = `${el.type}::${el.name}`;
+            if (el.type === 'package' && mergedMap.has(key)) {
+                const existing = mergedMap.get(key) ?? el;
+                // Merge children (de-duplicate by name+type)
+                const childKeys = new Set(
+                    (existing.children ?? []).map(c => `${c.type}::${c.name}`)
+                );
+                for (const child of el.children ?? []) {
+                    const ck = `${child.type}::${child.name}`;
+                    if (!childKeys.has(ck)) {
+                        existing.children = existing.children ?? [];
+                        existing.children.push(child);
+                        childKeys.add(ck);
+                    }
+                }
+                // Merge relationships
+                const relKeys = new Set(
+                    (existing.relationships ?? []).map(r => `${r.type}::${r.source}::${r.target}`)
+                );
+                for (const rel of el.relationships ?? []) {
+                    const rk = `${rel.type}::${rel.source}::${rel.target}`;
+                    if (!relKeys.has(rk)) {
+                        existing.relationships = existing.relationships ?? [];
+                        existing.relationships.push(rel);
+                        relKeys.add(rk);
+                    }
+                }
+                // Merge attributes (existing wins on conflict)
+                if (el.attributes) {
+                    existing.attributes = existing.attributes ?? {};
+                    for (const [k, v] of Object.entries(el.attributes)) {
+                        if (!(k in existing.attributes)) {
+                            existing.attributes[k] = v;
+                        }
+                    }
+                }
+            } else if (el.type === 'package') {
+                // Clone to avoid mutating original data
+                const clone: SysMLElementDTO = {
+                    ...el,
+                    children: [...(el.children ?? [])],
+                    relationships: [...(el.relationships ?? [])],
+                    attributes: { ...(el.attributes ?? {}) },
+                };
+                mergedMap.set(key, clone);
+                result.push(clone);
+            } else {
+                result.push(el);
+            }
+        }
+
+        return result;
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -529,15 +635,25 @@ export class VisualizationPanel {
             'JSON Files': ['json']
         };
 
-        // Determine default save location: use document folder, workspace folder, or fallback
+        // Determine default save location:
+        //   1. Folder of the source document
+        //   2. Folder of the first file URI (multi-file visualization)
+        //   3. Folder of the currently active editor
+        //   4. First workspace folder
         let defaultFolder: vscode.Uri | undefined;
-        if (this._document?.uri?.fsPath) {
-            // Use the folder containing the current document
-            const docPath = this._document.uri.fsPath;
-            const folderPath = docPath.substring(0, docPath.lastIndexOf('/'));
-            defaultFolder = vscode.Uri.file(folderPath);
-        } else if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-            // Use the first workspace folder
+        if (this._document?.uri?.scheme === 'file' && this._document.uri.fsPath) {
+            defaultFolder = vscode.Uri.file(path.dirname(this._document.uri.fsPath));
+        }
+        if (!defaultFolder && this._fileUris.length > 0) {
+            defaultFolder = vscode.Uri.file(path.dirname(this._fileUris[0].fsPath));
+        }
+        if (!defaultFolder) {
+            const activeEditor = vscode.window.activeTextEditor;
+            if (activeEditor?.document.uri.scheme === 'file') {
+                defaultFolder = vscode.Uri.file(path.dirname(activeEditor.document.uri.fsPath));
+            }
+        }
+        if (!defaultFolder && vscode.workspace.workspaceFolders?.length) {
             defaultFolder = vscode.workspace.workspaceFolders[0].uri;
         }
 
@@ -593,6 +709,17 @@ export class VisualizationPanel {
         this._currentView = viewId;
     }
 
+    public selectPackage(packageName: string): void {
+        // Store as pending so the next data message carries it to the webview
+        this._pendingPackageName = packageName;
+        this._currentView = 'elk';
+        // Also post directly in case the webview already has data
+        this._panel.webview.postMessage({
+            command: 'selectPackage',
+            packageName: packageName
+        });
+    }
+
     public notifyFileChanged(uri: vscode.Uri) {
         // Always force — the LSP server parses asynchronously, so the
         // model data may have changed even when the document text hasn't
@@ -636,19 +763,21 @@ export class VisualizationPanel {
         const cytoscapeUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'vendor', 'cytoscape.min.js'));
         const cytoscapeElkUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'vendor', 'cytoscape-elk.js'));
         const cytoscapeSvgUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'vendor', 'cytoscape-svg.js'));
+        const nonce = _getNonce();
 
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}' 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource}; worker-src blob:;">
     <title>SysML Model Visualizer</title>
-    <script src="${d3Uri}"></script>
-    <script src="${elkUri}"></script>
-    <script src="${cytoscapeUri}"></script>
-    <script src="${cytoscapeElkUri}"></script>
-    <script src="${cytoscapeSvgUri}"></script>
-    <style>
+    <script nonce="${nonce}" src="${d3Uri}"></script>
+    <script nonce="${nonce}" src="${elkUri}"></script>
+    <script nonce="${nonce}" src="${cytoscapeUri}"></script>
+    <script nonce="${nonce}" src="${cytoscapeElkUri}"></script>
+    <script nonce="${nonce}" src="${cytoscapeSvgUri}"></script>
+    <style nonce="${nonce}">
         * {
             font-family: var(--vscode-font-family), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
         }
@@ -749,12 +878,15 @@ export class VisualizationPanel {
             display: none;
             flex-direction: column;
             gap: 1px;
-            z-index: 20;
+            z-index: 600;
         }
         .view-dropdown-menu.show {
             display: flex;
         }
         .view-dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
             width: 100%;
             justify-content: flex-start;
             padding: 6px 10px;
@@ -766,7 +898,15 @@ export class VisualizationPanel {
             font-size: 11px;
             font-weight: 400;
             line-height: 1.3;
+            cursor: pointer;
+            text-align: left;
             transition: background 0.1s ease;
+        }
+        .view-dropdown-item .icon {
+            display: inline-block;
+            width: 14px;
+            text-align: center;
+            flex-shrink: 0;
         }
         .view-dropdown-item:hover {
             background-color: var(--vscode-list-hoverBackground);
@@ -884,6 +1024,21 @@ export class VisualizationPanel {
             width: 100%;
             height: calc(100vh - 100px);
             min-height: 400px;
+            overflow: hidden;
+        }
+        #pkg-dropdown {
+            position: absolute;
+            top: 8px;
+            left: 12px;
+            z-index: 500;
+            display: none;
+            align-items: center;
+            gap: 8px;
+        }
+        #pkg-dropdown .view-dropdown-menu {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
         }
         #visualization {
             width: 100%;
@@ -892,6 +1047,53 @@ export class VisualizationPanel {
             border-radius: 4px;
             overflow: hidden;
             position: relative;
+        }
+        #legend-popup {
+            display: none;
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 1000;
+            background: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 6px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+            padding: 14px 18px;
+            min-width: 240px;
+            max-width: 320px;
+            font-size: 12px;
+            color: var(--vscode-editor-foreground);
+        }
+        #about-backdrop {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.45);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+        }
+        #about-backdrop.show {
+            display: flex;
+        }
+        #about-popup {
+            background: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 8px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            padding: 18px 22px;
+            min-width: 300px;
+            max-width: 400px;
+            font-size: 12px;
+            color: var(--vscode-editor-foreground);
+            animation: aboutFadeIn 0.15s ease;
+        }
+        @keyframes aboutFadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to   { opacity: 1; transform: scale(1); }
         }
         /* Loading overlay styles */
         #loading-overlay {
@@ -1267,39 +1469,79 @@ export class VisualizationPanel {
             pointer-events: none;
             border-radius: 2px;
         }
+
+        /* ── Easter egg ──────────────────────────────────────── */
+        #ee-egg {
+            display: none;
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+            padding: 3px 5px;
+            border-radius: 4px;
+            background: transparent;
+            border: none;
+            color: var(--vscode-descriptionForeground);
+            opacity: 0;
+            transition: opacity 0.6s ease-in;
+            user-select: none;
+        }
+        #ee-egg.revealed {
+            display: inline-block;
+            opacity: 1;
+        }
+        #ee-egg:hover {
+            background: var(--vscode-button-hoverBackground);
+            transform: scale(1.3);
+            transition: transform 0.15s ease, background 0.15s ease;
+        }
+        @keyframes ee-wobble {
+            0%,100% { transform: rotate(0deg); }
+            20%  { transform: rotate(-8deg); }
+            40%  { transform: rotate(10deg); }
+            60%  { transform: rotate(-6deg); }
+            80%  { transform: rotate(4deg); }
+        }
+        #ee-egg.hatch {
+            animation: ee-wobble 0.5s ease;
+        }
     </style>
 </head>
 <body>
     <div id="controls">
-        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; padding: 2px 0;">
             <div class="view-dropdown">
                 <button id="view-dropdown-btn" class="view-btn" title="Switch between visualization views">
                     <span style="font-size: 8px;">▼</span> View
                 </button>
                 <div id="view-dropdown-menu" class="view-dropdown-menu">
-                    <button class="view-dropdown-item" data-view="elk">◆ General</button>
-                    <button class="view-dropdown-item" data-view="ibd">▦ Interconnection</button>
-                    <button class="view-dropdown-item" data-view="activity">▶ Activity</button>
-                    <button class="view-dropdown-item" data-view="state">⌘ State</button>
-                    <button class="view-dropdown-item" data-view="sequence">⇄ Sequence</button>
-                    <button class="view-dropdown-item" data-view="usecase">◎ Case</button>
+                    <button class="view-dropdown-item" data-view="elk"><span class="icon">◆</span> General</button>
+                    <button class="view-dropdown-item" data-view="ibd"><span class="icon">▦</span> Interconnection</button>
+                    <button class="view-dropdown-item" data-view="activity"><span class="icon">▶</span> Activity</button>
+                    <button class="view-dropdown-item" data-view="state"><span class="icon">⌘</span> State</button>
+                    <button class="view-dropdown-item" data-view="sequence"><span class="icon">⇄</span> Sequence</button>
+                    <button class="view-dropdown-item" data-view="usecase"><span class="icon">◎</span> Case</button>
                     <div style="border-top: 1px solid var(--vscode-panel-border); margin: 3px 0;"></div>
-                    <button class="view-dropdown-item" data-view="tree">▲ Tree</button>
-                    <button class="view-dropdown-item" data-view="package">▤ Package</button>
-                    <button class="view-dropdown-item" data-view="graph">● Graph</button>
-                    <button class="view-dropdown-item" data-view="hierarchy">■ Hierarchy</button>
+                    <button class="view-dropdown-item" data-view="tree"><span class="icon">▲</span> Tree</button>
+                    <button class="view-dropdown-item" data-view="package"><span class="icon">▤</span> Package</button>
+                    <button class="view-dropdown-item" data-view="graph"><span class="icon">●</span> Graph</button>
+                    <button class="view-dropdown-item" data-view="hierarchy"><span class="icon">■</span> Hierarchy</button>
+                    <div style="border-top: 1px solid var(--vscode-panel-border); margin: 3px 0;"></div>
+                    <button class="view-dropdown-item" data-view="dashboard"><span class="icon">📊</span> Model Dashboard</button>
                 </div>
             </div>
             <span style="color: var(--vscode-panel-border);">|</span>
             <button id="fit-btn" class="action-btn" title="Fit diagram to view">⊞ Fit</button>
             <button id="reset-btn" class="action-btn" title="Reset zoom">↻ Reset</button>
             <button id="layout-direction-btn" class="action-btn" title="Toggle layout direction">→ LR</button>
-            <button id="category-headers-btn" class="action-btn" title="Toggle category headers">☰ Group</button>
-            <button id="minimap-toolbar-btn" class="action-btn" title="Toggle minimap">🗺</button>
+            <button id="category-headers-btn" class="action-btn active" title="Toggle category headers" style="background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-button-background);">☰ Grouped</button>
+            <button id="minimap-toolbar-btn" class="action-btn" title="Toggle minimap">⊡ Map</button>
+            <button id="legend-btn" class="action-btn" title="Show diagram legend">🔑 Legend</button>
+            <button id="ee-egg" title="What's this?">🥚</button>
+            <button id="about-btn" class="action-btn" title="About this extension">ℹ️ About</button>
             <button id="activity-debug-btn" class="action-btn" title="Show Labels on Forks and Joins" style="display: none;">🏷️ Show Labels</button>
             <span style="color: var(--vscode-panel-border);">|</span>
             <div class="export-dropdown" style="position: relative; display: inline-block;">
-                <button id="export-btn" class="primary-btn" title="Export diagram">⇓ Export</button>
+                <button id="export-btn" class="action-btn" title="Export diagram">⇓ Export</button>
                 <div id="export-menu" class="export-menu">
                     <div class="export-submenu-container">
                         <button class="export-menu-item" data-format="png-parent">PNG</button>
@@ -1335,13 +1577,94 @@ export class VisualizationPanel {
         </div>
     </div>
 
-    <div id="diagram-selector-container" style="display: none; padding: 6px 12px; background: var(--vscode-editor-background); border-bottom: 1px solid var(--vscode-panel-border); align-items: center; gap: 8px;">
-        <label id="diagram-selector-label" style="font-size: 11px; font-weight: 500; color: var(--vscode-foreground);">Diagram:</label>
-        <select id="diagram-selector" class="diagram-selector" style="padding: 4px 8px; font-size: 11px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); border-radius: 3px; cursor: pointer; min-width: 160px;"></select>
-        <span id="diagram-count" style="font-size: 10px; color: var(--vscode-descriptionForeground);"></span>
-    </div>
     <div id="visualization-wrapper">
+        <div id="pkg-dropdown">
+            <button id="pkg-dropdown-btn" class="view-btn" title="Filter by package or diagram">
+                <span style="font-size: 8px;">▼</span> <span id="pkg-dropdown-label">Package</span>
+            </button>
+            <div id="pkg-dropdown-menu" class="view-dropdown-menu"></div>
+        </div>
         <div id="visualization"></div>
+        <!-- Legend popup overlay -->
+        <div id="legend-popup">
+            <div id="legend-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 8px; cursor: grab; user-select: none;">
+                <span style="font-weight: 600; font-size: 13px;">Diagram Legend</span>
+                <button id="legend-close-btn" style="background: none; border: none; color: var(--vscode-editor-foreground); cursor: pointer; font-size: 16px; padding: 0 2px; opacity: 0.7;" title="Close legend">✕</button>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 7px;">
+                <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; margin-top: 2px;">Relationships</div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <svg width="40" height="12"><line x1="0" y1="6" x2="32" y2="6" stroke="#569CD6" stroke-width="2" stroke-dasharray="5,3"/><polygon points="32,2 40,6 32,10" fill="#569CD6"/></svg>
+                    <span>Typing <code style="font-size: 10px; opacity: 0.8;">: Type</code></span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <svg width="40" height="12"><line x1="0" y1="6" x2="32" y2="6" stroke="#C586C0" stroke-width="2"/><polygon points="32,2 40,6 32,10" fill="#C586C0"/></svg>
+                    <span>Specialization <code style="font-size: 10px; opacity: 0.8;">:&gt;</code></span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <svg width="40" height="14"><polygon points="0,3 7,7 0,11" fill="#4EC9B0"/><line x1="7" y1="7" x2="40" y2="7" stroke="#4EC9B0" stroke-width="2"/></svg>
+                    <span>Containment <code style="font-size: 10px; opacity: 0.8;">◆</code></span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <svg width="40" height="12"><line x1="0" y1="6" x2="40" y2="6" stroke="#D7BA7D" stroke-width="2.5"/></svg>
+                    <span>Connection</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <svg width="40" height="12"><line x1="0" y1="6" x2="32" y2="6" stroke="#D7BA7D" stroke-width="2.5"/><circle cx="36" cy="6" r="4" fill="none" stroke="#D7BA7D" stroke-width="1.5"/></svg>
+                    <span>Interface</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <svg width="40" height="12"><line x1="0" y1="6" x2="32" y2="6" stroke="#4EC9B0" stroke-width="2.5"/><polygon points="32,2 40,6 32,10" fill="#4EC9B0"/></svg>
+                    <span>Flow</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <svg width="40" height="12"><line x1="0" y1="6" x2="40" y2="6" stroke="#808080" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
+                    <span>Binding <code style="font-size: 10px; opacity: 0.8;">=</code></span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <svg width="40" height="12"><line x1="0" y1="6" x2="32" y2="6" stroke="#B5CEA8" stroke-width="2" stroke-dasharray="6,3"/><polygon points="32,2 40,6 32,10" fill="#B5CEA8"/></svg>
+                    <span>Allocation</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <svg width="40" height="12"><line x1="0" y1="6" x2="32" y2="6" stroke="#D4D4D4" stroke-width="1.5" stroke-dasharray="5,3"/><polygon points="32,2 40,6 32,10" fill="#D4D4D4"/></svg>
+                    <span>Dependency</span>
+                </div>
+                <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; margin-top: 6px;">Structure</div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <svg width="40" height="12"><line x1="0" y1="6" x2="32" y2="6" stroke="#6A9955" stroke-width="1.5" stroke-dasharray="2,3"/><polygon points="32,2 40,6 32,10" fill="#6A9955"/></svg>
+                    <span>Hierarchy <span style="font-size: 10px; opacity: 0.7;">(parent→child)</span></span>
+                </div>
+            </div>
+        </div>
+        <!-- About popup modal -->
+        <div id="about-backdrop">
+            <div id="about-popup">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 10px;">
+                    <span style="font-weight: 700; font-size: 15px;">SysML v2 Extension</span>
+                    <button id="about-close-btn" style="background: none; border: none; color: var(--vscode-editor-foreground); cursor: pointer; font-size: 18px; padding: 0 4px; opacity: 0.7;" title="Close">✕</button>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 8px; font-size: 12px; line-height: 1.5;">
+                    <p style="margin: 0;">A comprehensive SysML v2.0 language support extension for VS Code with syntax highlighting, formatting, validation, navigation, and interactive visualizations.</p>
+                    <div style="margin-top: 4px;">
+                        <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; margin-bottom: 6px;">Features</div>
+                        <ul style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px;">
+                            <li>Multiple diagram views (General, Interconnection, Activity, State, Sequence)</li>
+                            <li>Model Dashboard with metrics and analysis</li>
+                            <li>Drag-and-drop legend and minimap</li>
+                            <li>Export to PNG, SVG, JSON</li>
+                            <li>Syntax highlighting and code formatting</li>
+                        </ul>
+                    </div>
+                    <div style="display: flex; gap: 10px; margin-top: 8px;">
+                        <button id="about-rate-link" class="action-btn" style="font-size: 11px; cursor: pointer;" title="Rate on marketplace">⭐ Rate</button>
+                        <button id="about-repo-link" class="action-btn" style="font-size: 11px; cursor: pointer;" title="View source on GitHub">🔗 GitHub</button>
+                    </div>
+                    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--vscode-panel-border); font-size: 10px; opacity: 0.6; text-align: center;">
+                        v\${this._extensionVersion} · Made with ❤️ for the SysML community
+                    </div>
+                </div>
+            </div>
+        </div>
         <!-- Loading overlay (outside visualization to avoid being removed) -->
         <div id="loading-overlay">
             <div class="loading-spinner"></div>
@@ -1362,7 +1685,7 @@ export class VisualizationPanel {
         <div id="minimap-viewport"></div>
     </div>
 
-    <script>
+    <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
 
         // ELK Worker URL (must be set before ELK is instantiated)
@@ -1545,6 +1868,21 @@ export class VisualizationPanel {
             const debugBtn = document.getElementById('activity-debug-btn');
             if (debugBtn) {
                 debugBtn.style.display = (view === 'activity') ? 'inline-block' : 'none';
+            }
+
+            // Show legend button only for Cytoscape-based views
+            const legendBtn = document.getElementById('legend-btn');
+            const legendPopup = document.getElementById('legend-popup');
+            if (legendBtn) {
+                const cytoscapeViews = ['general', 'elk'];
+                legendBtn.style.display = cytoscapeViews.includes(view) ? 'inline-block' : 'none';
+                // Hide popup when switching away from cytoscape views
+                if (!cytoscapeViews.includes(view) && legendPopup) {
+                    legendPopup.style.display = 'none';
+                    legendBtn.classList.remove('active');
+                    legendBtn.style.background = '';
+                    legendBtn.style.color = '';
+                }
             }
         }
 
@@ -2885,6 +3223,8 @@ export class VisualizationPanel {
             }
         }
 
+        const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
         function normalizeAttributes(attributes) {
             const properties = {};
             if (!attributes) {
@@ -2893,10 +3233,16 @@ export class VisualizationPanel {
 
             if (typeof attributes.forEach === 'function') {
                 attributes.forEach((value, key) => {
-                    properties[key] = value;
+                    if (!DANGEROUS_KEYS.has(key)) {
+                        properties[key] = value;
+                    }
                 });
             } else {
-                Object.assign(properties, attributes);
+                for (const key of Object.keys(attributes)) {
+                    if (!DANGEROUS_KEYS.has(key)) {
+                        properties[key] = attributes[key];
+                    }
+                }
             }
             return properties;
         }
@@ -3241,8 +3587,14 @@ export class VisualizationPanel {
                     currentData = message;
                     filteredData = null; // Reset filter when new data arrives
 
-                    // Use the view state from the message if provided, otherwise keep current
-                    if (message.currentView) {
+                    // If the extension requested a specific package, apply it
+                    // before anything else so updateDiagramSelector picks it up.
+                    if (message.pendingPackageName) {
+                        selectedDiagramName = message.pendingPackageName;
+                        selectedDiagramIndex = 0; // Will be corrected by updateDiagramSelector
+                        currentView = 'elk';
+                    } else if (message.currentView) {
+                        // Use the view state from the message if provided, otherwise keep current
                         currentView = message.currentView;
                     }
 
@@ -3257,6 +3609,14 @@ export class VisualizationPanel {
                     // Handle view change request from extension
                     if (message.view) {
                         changeView(message.view);
+                    }
+                    break;
+                case 'selectPackage':
+                    // Switch to General View and select a specific package in the dropdown
+                    if (message.packageName) {
+                        selectedDiagramName = message.packageName;
+                        selectedDiagramIndex = 0; // Will be corrected by updateDiagramSelector
+                        changeView('elk');
                     }
                     break;
                 case 'export':
@@ -3528,11 +3888,26 @@ export class VisualizationPanel {
             d3.selectAll('.highlighted-element').classed('highlighted-element', false);
             d3.selectAll('.selected').classed('selected', false);
 
-            // Clear any selection styling
+            // Restore original stroke/width from saved data attributes on all node backgrounds
             d3.selectAll('.node-group').style('opacity', null);
-            d3.selectAll('.node-group .node-background').style('stroke', null).style('stroke-width', null);
-            d3.selectAll('.general-node .node-background').style('stroke', null).style('stroke-width', null);
-            d3.selectAll('.ibd-part rect').style('stroke', null).style('stroke-width', null);
+            d3.selectAll('.node-group .node-background').each(function() {
+                const el = d3.select(this);
+                el.style('stroke', el.attr('data-original-stroke') || 'var(--vscode-panel-border)');
+                el.style('stroke-width', el.attr('data-original-width') || '1px');
+            });
+            d3.selectAll('.general-node .node-background').each(function() {
+                const el = d3.select(this);
+                el.style('stroke', el.attr('data-original-stroke') || 'var(--vscode-panel-border)');
+                el.style('stroke-width', el.attr('data-original-width') || '2px');
+            });
+            d3.selectAll('.ibd-part rect:first-child').each(function() {
+                const el = d3.select(this);
+                const orig = el.attr('data-original-stroke');
+                if (orig) {
+                    el.style('stroke', orig);
+                    el.style('stroke-width', el.attr('data-original-width') || '2px');
+                }
+            });
             d3.selectAll('.graph-node-group').style('opacity', null);
             d3.selectAll('.hierarchy-cell').style('opacity', null);
             if (cy) {
@@ -4085,6 +4460,20 @@ export class VisualizationPanel {
                     return;
                 }
                 relationshipEdgeIds.add(edgeId);
+
+                // Build a readable label:
+                //  - Use rel.name when explicitly provided
+                //  - For 'typing' relationships show SysML notation ": Target"
+                //  - Otherwise prettify the relationship type
+                let edgeLabel = rel.name || '';
+                if (!edgeLabel) {
+                    if (rel.type === 'typing') {
+                        edgeLabel = ': ' + rel.target;
+                    } else {
+                        edgeLabel = rel.type;
+                    }
+                }
+
                 cyElements.push({
                     group: 'edges',
                     data: {
@@ -4092,7 +4481,8 @@ export class VisualizationPanel {
                         source: sourceId,
                         target: targetId,
                         type: 'relationship',
-                        label: rel.type
+                        relType: rel.type || 'relationship',
+                        label: edgeLabel
                     }
                 });
             });
@@ -4248,23 +4638,125 @@ export class VisualizationPanel {
                         'label': 'data(label)'
                     }
                 },
+                // --- Per-relationship-type styles (SysML v2 notation) ---
                 {
                     selector: 'edge[type = "relationship"]',
                     style: {
-                        'line-color': chartRed,
-                        'target-arrow-color': chartRed,
-                        'width': 2.5,
+                        'line-color': chartBlue,
+                        'target-arrow-color': chartBlue,
+                        'width': 2,
                         'line-style': 'solid'
+                    }
+                },
+                {
+                    selector: 'edge[relType = "typing"]',
+                    style: {
+                        'line-color': '#569CD6',
+                        'target-arrow-color': '#569CD6',
+                        'line-style': 'dashed',
+                        'width': 2,
+                        'target-arrow-shape': 'triangle',
+                        'arrow-scale': 1
+                    }
+                },
+                {
+                    selector: 'edge[relType = "specializes"]',
+                    style: {
+                        'line-color': '#C586C0',
+                        'target-arrow-color': '#C586C0',
+                        'line-style': 'solid',
+                        'width': 2,
+                        'target-arrow-shape': 'triangle-backcurve',
+                        'arrow-scale': 1.2
+                    }
+                },
+                {
+                    selector: 'edge[relType = "containment"]',
+                    style: {
+                        'line-color': '#4EC9B0',
+                        'target-arrow-color': '#4EC9B0',
+                        'line-style': 'solid',
+                        'width': 2,
+                        'source-arrow-shape': 'diamond',
+                        'source-arrow-color': '#4EC9B0',
+                        'source-arrow-fill': 'filled',
+                        'arrow-scale': 1
+                    }
+                },
+                {
+                    selector: 'edge[relType = "connect"]',
+                    style: {
+                        'line-color': '#D7BA7D',
+                        'target-arrow-color': '#D7BA7D',
+                        'line-style': 'solid',
+                        'width': 2.5,
+                        'target-arrow-shape': 'none'
+                    }
+                },
+                {
+                    selector: 'edge[relType = "interface"]',
+                    style: {
+                        'line-color': '#D7BA7D',
+                        'target-arrow-color': '#D7BA7D',
+                        'line-style': 'solid',
+                        'width': 2.5,
+                        'target-arrow-shape': 'circle',
+                        'arrow-scale': 0.8
+                    }
+                },
+                {
+                    selector: 'edge[relType = "flow"]',
+                    style: {
+                        'line-color': '#4EC9B0',
+                        'target-arrow-color': '#4EC9B0',
+                        'line-style': 'solid',
+                        'width': 2.5,
+                        'target-arrow-shape': 'triangle',
+                        'arrow-scale': 1.2
+                    }
+                },
+                {
+                    selector: 'edge[relType = "binding"]',
+                    style: {
+                        'line-color': '#808080',
+                        'target-arrow-color': '#808080',
+                        'line-style': 'dashed',
+                        'width': 1.5,
+                        'target-arrow-shape': 'none'
+                    }
+                },
+                {
+                    selector: 'edge[relType = "allocation"]',
+                    style: {
+                        'line-color': '#B5CEA8',
+                        'target-arrow-color': '#B5CEA8',
+                        'line-style': 'dashed',
+                        'width': 2,
+                        'target-arrow-shape': 'triangle',
+                        'arrow-scale': 1
+                    }
+                },
+                {
+                    selector: 'edge[relType = "dependency"]',
+                    style: {
+                        'line-color': '#D4D4D4',
+                        'target-arrow-color': '#D4D4D4',
+                        'line-style': 'dashed',
+                        'width': 1.5,
+                        'target-arrow-shape': 'triangle',
+                        'arrow-scale': 1
                     }
                 },
                 {
                     selector: 'edge[type = "hierarchy"]',
                     style: {
-                        'line-color': chartBlue,
-                        'target-arrow-color': chartBlue,
+                        'line-color': '#6A9955',
+                        'target-arrow-color': '#6A9955',
                         'target-arrow-shape': 'triangle',
-                        'line-style': 'dashed',
-                        'arrow-scale': 1.2
+                        'line-style': 'dotted',
+                        'width': 1.5,
+                        'arrow-scale': 1,
+                        'opacity': 0.6
                     }
                 },
 
@@ -5014,6 +5506,17 @@ export class VisualizationPanel {
             if (categoryHeadersBtn) {
                 categoryHeadersBtn.style.display = activeView === 'elk' ? 'inline-flex' : 'none';
                 categoryHeadersBtn.textContent = showCategoryHeaders ? '☰ Grouped' : '☷ Flat';
+                if (showCategoryHeaders) {
+                    categoryHeadersBtn.classList.add('active');
+                    categoryHeadersBtn.style.background = 'var(--vscode-button-background)';
+                    categoryHeadersBtn.style.color = 'var(--vscode-button-foreground)';
+                    categoryHeadersBtn.style.borderColor = 'var(--vscode-button-background)';
+                } else {
+                    categoryHeadersBtn.classList.remove('active');
+                    categoryHeadersBtn.style.background = '';
+                    categoryHeadersBtn.style.color = '';
+                    categoryHeadersBtn.style.borderColor = '';
+                }
             }
 
             const dropdownButton = document.getElementById('view-dropdown-btn');
@@ -5042,17 +5545,18 @@ export class VisualizationPanel {
 
         // Update diagram selector for multi-diagram views
         function updateDiagramSelector(activeView) {
-            const container = document.getElementById('diagram-selector-container');
-            const selector = document.getElementById('diagram-selector');
+            const pkgDropdown = document.getElementById('pkg-dropdown');
+            const pkgMenu = document.getElementById('pkg-dropdown-menu');
+            const pkgLabel = document.getElementById('pkg-dropdown-label');
 
-            if (!container || !selector || !currentData) {
-                if (container) container.style.display = 'none';
+            if (!pkgDropdown || !pkgMenu || !currentData) {
+                if (pkgDropdown) pkgDropdown.style.display = 'none';
                 return;
             }
 
             // Determine if this view supports multiple diagrams
             let diagrams = [];
-            let labelText = 'Diagram:';
+            let labelText = 'Package';
 
             if (activeView === 'elk') {
                 // For General View, extract top-level packages
@@ -5068,11 +5572,11 @@ export class VisualizationPanel {
                 function findPackages(elementList, depth = 0) {
                     elementList.forEach(el => {
                         const typeLower = (el.type || '').toLowerCase();
-                        if (typeLower.includes('package') && depth <= 3 && !seenPackages.has(el.name)) {
+                        if (typeLower.includes('package') && !seenPackages.has(el.name)) {
                             seenPackages.add(el.name);
                             packagesArray.push({ name: el.name, element: el });
                         }
-                        // Recurse into all children to find nested packages (not just packages)
+                        // Recurse into all children to find nested packages
                         if (el.children && el.children.length > 0) {
                             findPackages(el.children, depth + 1);
                         }
@@ -5086,12 +5590,12 @@ export class VisualizationPanel {
                     diagrams.push(pkg);
                 });
 
-                labelText = 'Package:';
+                labelText = 'Package';
             } else if (activeView === 'activity') {
                 // Get activity diagrams
                 const preparedData = prepareDataForView(currentData, 'activity');
                 diagrams = preparedData?.diagrams || [];
-                labelText = 'Action Flow:';
+                labelText = 'Action Flow';
             } else if (activeView === 'state') {
                 // For state view, extract state machines from state elements
                 const preparedData = prepareDataForView(currentData, 'state');
@@ -5135,11 +5639,11 @@ export class VisualizationPanel {
                     diagrams = [{ name: 'All States', element: null }];
                 }
 
-                labelText = 'State Machine:';
+                labelText = 'State Machine';
             } else if (activeView === 'sequence') {
                 // Get sequence diagrams
                 diagrams = currentData?.sequenceDiagrams || [];
-                labelText = 'Sequence:';
+                labelText = 'Sequence';
             } else if (activeView === 'ibd' || activeView === 'usecase' || activeView === 'tree' || activeView === 'graph' || activeView === 'hierarchy') {
                 // For these views, extract top-level packages (same as elk/General View)
                 const elements = currentData?.elements || [];
@@ -5154,7 +5658,7 @@ export class VisualizationPanel {
                 function findPackagesForView(elementList, depth = 0) {
                     elementList.forEach(el => {
                         const typeLower = (el.type || '').toLowerCase();
-                        if (typeLower.includes('package') && depth <= 3 && !seenPackages.has(el.name)) {
+                        if (typeLower.includes('package') && !seenPackages.has(el.name)) {
                             seenPackages.add(el.name);
                             packagesArray.push({ name: el.name, element: el });
                         }
@@ -5172,32 +5676,26 @@ export class VisualizationPanel {
                     diagrams.push(pkg);
                 });
 
-                labelText = 'Package:';
+                labelText = 'Package';
             }
 
             // Show/hide selector based on number of diagrams
             if (diagrams.length <= 1) {
-                container.style.display = 'none';
+                pkgDropdown.style.display = 'none';
                 selectedDiagramIndex = 0;
                 selectedDiagramName = diagrams.length === 1 ? diagrams[0].name : null;
                 return;
             }
 
-            container.style.display = 'flex';
-
-            // Update label
-            const label = document.getElementById('diagram-selector-label');
-            if (label) label.textContent = labelText;
-
-            // Update count
-            const countEl = document.getElementById('diagram-count');
-            if (countEl) countEl.textContent = '(' + diagrams.length + ' available)';
+            pkgDropdown.style.display = 'flex';
+            if (pkgLabel) pkgLabel.textContent = labelText;
 
             // Try to restore selection by name if we have a previously selected diagram
             if (selectedDiagramName) {
                 const matchingIndex = diagrams.findIndex(d => d.name === selectedDiagramName);
                 if (matchingIndex >= 0) {
                     selectedDiagramIndex = matchingIndex;
+                    if (pkgLabel) pkgLabel.textContent = selectedDiagramName;
                 } else {
                     // Diagram no longer exists, reset to first
                     selectedDiagramIndex = 0;
@@ -5208,21 +5706,33 @@ export class VisualizationPanel {
                 selectedDiagramName = diagrams[0]?.name || null;
             }
 
-            // Populate selector
-            selector.innerHTML = '';
+            // Populate dropdown menu
+            pkgMenu.innerHTML = '';
             diagrams.forEach((d, idx) => {
-                const option = document.createElement('option');
-                option.value = idx;
-                option.textContent = d.name || 'Diagram ' + (idx + 1);
-                if (idx === selectedDiagramIndex) option.selected = true;
-                selector.appendChild(option);
+                const item = document.createElement('button');
+                item.className = 'view-dropdown-item';
+                item.textContent = d.name || 'Diagram ' + (idx + 1);
+                if (idx === selectedDiagramIndex) item.classList.add('active');
+                item.addEventListener('click', function() {
+                    selectedDiagramIndex = idx;
+                    selectedDiagramName = d.name;
+                    // Update active state
+                    pkgMenu.querySelectorAll('.view-dropdown-item').forEach(i => i.classList.remove('active'));
+                    item.classList.add('active');
+                    // Update label
+                    if (pkgLabel) pkgLabel.textContent = d.name;
+                    // Close menu
+                    pkgMenu.classList.remove('show');
+                    // Re-render
+                    renderVisualization(currentView);
+                });
+                pkgMenu.appendChild(item);
             });
 
             // Ensure selected index is valid
             if (selectedDiagramIndex >= diagrams.length) {
                 selectedDiagramIndex = 0;
                 selectedDiagramName = diagrams[0]?.name || null;
-                selector.value = '0';
             }
         }
 
@@ -5278,10 +5788,21 @@ export class VisualizationPanel {
 
         function toggleCategoryHeaders() {
             showCategoryHeaders = !showCategoryHeaders;
-            // Update button text
+            // Update button text and active styling
             const btn = document.getElementById('category-headers-btn');
             if (btn) {
                 btn.textContent = showCategoryHeaders ? '☰ Grouped' : '☷ Flat';
+                if (showCategoryHeaders) {
+                    btn.classList.add('active');
+                    btn.style.background = 'var(--vscode-button-background)';
+                    btn.style.color = 'var(--vscode-button-foreground)';
+                    btn.style.borderColor = 'var(--vscode-button-background)';
+                } else {
+                    btn.classList.remove('active');
+                    btn.style.background = '';
+                    btn.style.color = '';
+                    btn.style.borderColor = '';
+                }
             }
             // Re-render the General view
             if (currentView === 'elk') {
@@ -5496,13 +6017,12 @@ export class VisualizationPanel {
                     // Clear all highlights when clicking on empty space
                     clearVisualHighlights();
                     g.selectAll('.expanded-details').remove();
-                    // Reset both graph and tree view selections
-                    g.selectAll('.graph-node-background')
-                        .style('stroke', 'var(--vscode-panel-border)')
-                        .style('stroke-width', '2px');
-                    g.selectAll('.node-background')
-                        .style('stroke', 'var(--vscode-panel-border)')
-                        .style('stroke-width', '1px');
+                    // Reset graph view selections (clearVisualHighlights already restores node-background)
+                    g.selectAll('.graph-node-background').each(function() {
+                        const el = d3.select(this);
+                        el.style('stroke', el.attr('data-original-stroke') || 'var(--vscode-panel-border)');
+                        el.style('stroke-width', el.attr('data-original-width') || '2px');
+                    });
                     g.selectAll('.node-group').classed('selected', false);
                     g.selectAll('.graph-node-group').classed('selected', false);
                     g.selectAll('.hierarchy-cell').classed('selected', false);
@@ -5756,6 +6276,8 @@ export class VisualizationPanel {
                     .attr('width', nodeWidth)
                     .attr('height', 46)
                     .attr('rx', 5)
+                    .attr('data-original-stroke', borderColor)
+                    .attr('data-original-width', borderWidth)
                     .style('fill', 'var(--vscode-editor-background)')
                     .style('stroke', borderColor)
                     .style('stroke-width', borderWidth)
@@ -5822,10 +6344,12 @@ export class VisualizationPanel {
             // Remove any existing expanded details
             g.selectAll('.expanded-details').remove();
 
-            // Remove selection styling from all nodes
-            g.selectAll('.node-background')
-                .style('stroke', 'var(--vscode-panel-border)')
-                .style('stroke-width', '1px');
+            // Remove selection styling from all nodes - restore original strokes
+            g.selectAll('.node-background').each(function() {
+                const el = d3.select(this);
+                el.style('stroke', el.attr('data-original-stroke') || 'var(--vscode-panel-border)');
+                el.style('stroke-width', el.attr('data-original-width') || '1px');
+            });
             g.selectAll('.node-group').classed('selected', false);
 
             // Add selection styling to clicked node
@@ -6370,6 +6894,8 @@ export class VisualizationPanel {
                     .attr('height', nodeHeight)
                     .attr('rx', 8)
                     .attr('ry', 8)
+                    .attr('data-original-stroke', borderColor)
+                    .attr('data-original-width', borderWidth)
                     .style('fill', 'var(--vscode-editor-background)')
                     .style('stroke', borderColor)
                     .style('stroke-width', borderWidth)
@@ -7771,32 +8297,40 @@ export class VisualizationPanel {
                             });
                         }
 
-                        // Check for type reference (part x:TypeName) - check multiple possible locations
-                        var partType = null;
-                        if (el.attributes && el.attributes.get) {
-                            partType = el.attributes.get('partType') || el.attributes.get('type') || el.attributes.get('typedBy');
-                        }
-                        // Also check direct property
-                        if (!partType && el.partType) {
-                            partType = el.partType;
-                        }
-                        // Also check typing property (set by parser for typed parts)
-                        if (!partType && el.typing) {
-                            // Strip leading colon if present (parser may include it)
-                            partType = el.typing.replace(/^:/, '').trim();
-                        }
-                        // Check if the element has a colon-separated type in its full definition
-                        if (!partType && el.fullText) {
-                            // Note: Double-escaped for template literal
-                            var typeMatch = el.fullText.match(/:\\s*([A-Z][a-zA-Z0-9_]*)/);
-                            if (typeMatch) partType = typeMatch[1];
+                        // Check for type references — support multiple comma-separated types
+                        var partTypes = [];
+                        // Use typings array if available (set by convertDTOElementsToJSON)
+                        if (el.typings && el.typings.length > 0) {
+                            partTypes = el.typings.map(function(t) { return t.replace(/^:/, '').trim(); }).filter(Boolean);
+                        } else {
+                            // Fallback: check attributes, direct properties, typing string
+                            var partType = null;
+                            if (el.attributes && el.attributes.get) {
+                                partType = el.attributes.get('partType') || el.attributes.get('type') || el.attributes.get('typedBy');
+                            }
+                            if (!partType && el.partType) {
+                                partType = el.partType;
+                            }
+                            if (!partType && el.typing) {
+                                partType = el.typing.replace(/^:/, '').trim();
+                            }
+                            if (!partType && el.fullText) {
+                                var typeMatch = el.fullText.match(/:\\s*([A-Z][a-zA-Z0-9_]*)/);
+                                if (typeMatch) partType = typeMatch[1];
+                            }
+                            if (partType) {
+                                // Split comma-separated types
+                                partTypes = partType.split(',').map(function(t) { return t.trim(); }).filter(Boolean);
+                            }
                         }
 
-                        if (partType && !typeLower.includes('def')) {
-                            partToDefLinks.push({
-                                source: el.name,
-                                target: partType,
-                                type: 'typed by'
+                        if (partTypes.length > 0 && !typeLower.includes('def')) {
+                            partTypes.forEach(function(pt) {
+                                partToDefLinks.push({
+                                    source: el.name,
+                                    target: pt,
+                                    type: 'typed by'
+                                });
                             });
                         }
 
@@ -8197,14 +8731,18 @@ export class VisualizationPanel {
                         .style('cursor', 'pointer');
 
                     // Background - definitions have dashed border, usages have solid bold border
+                    var _nodeStroke = isLibValidated ? '#4EC9B0' : typeColor;
+                    var _nodeStrokeW = isUsage ? '3px' : '2px';
                     nodeG.append('rect')
                         .attr('class', 'node-background')
                         .attr('width', pos.width)
                         .attr('height', pos.height)
                         .attr('rx', isDefinition ? 4 : 8)
+                        .attr('data-original-stroke', _nodeStroke)
+                        .attr('data-original-width', _nodeStrokeW)
                         .style('fill', 'var(--vscode-editor-background)')
-                        .style('stroke', isLibValidated ? '#4EC9B0' : typeColor)
-                        .style('stroke-width', isUsage ? '3px' : '2px')
+                        .style('stroke', _nodeStroke)
+                        .style('stroke-width', _nodeStrokeW)
                         .style('stroke-dasharray', isDefinition ? '6,3' : 'none');
 
                     // Type color bar at top
@@ -8620,10 +9158,14 @@ export class VisualizationPanel {
                                 el.relationships.forEach(function(rel) {
                                     var tgt = rel.target || rel.relatedElement;
                                     if (elementMap.has(el.name) && elementMap.has(tgt)) {
+                                        var rType = rel.type || 'relates';
                                         connections.push({
                                             source: el.name,
                                             target: tgt,
-                                            type: rel.type || 'relates'
+                                            type: rType,
+                                            isSpecialization: rType === 'specializes',
+                                            isTypedBy: rType === 'typing' || rType === 'typed by',
+                                            isContains: rType === 'contains' || rType === 'containment'
                                         });
                                     }
                                 });
@@ -8656,7 +9198,14 @@ export class VisualizationPanel {
                         var tgtPos = nodePositions.get(conn.target);
                         if (!srcPos || !tgtPos || conn.source === conn.target) return;
 
-                        var edgeKey = conn.source + '->' + conn.target;
+                        // Normalize type for dedup: 'typing' and 'typed by' are the same relationship
+                        var edgeTypeNorm = conn.type;
+                        if (edgeTypeNorm === 'typing') edgeTypeNorm = 'typed by';
+                        if (edgeTypeNorm === 'connection') edgeTypeNorm = 'connect';
+                        if (edgeTypeNorm === 'allocation') edgeTypeNorm = 'allocate';
+                        if (edgeTypeNorm === 'binding') edgeTypeNorm = 'bind';
+                        if (edgeTypeNorm === 'containment') edgeTypeNorm = 'contains';
+                        var edgeKey = conn.source + '->' + conn.target + '::' + edgeTypeNorm;
                         if (drawnEdges.has(edgeKey)) return;
                         drawnEdges.add(edgeKey);
 
@@ -8695,33 +9244,33 @@ export class VisualizationPanel {
 
                         var strokeColor, strokeDash, markerEnd, strokeWidth;
 
-                        if (conn.isSpecialization) {
+                        if (conn.isSpecialization || conn.type === 'specializes') {
                             strokeColor = '#C586C0';
                             strokeDash = 'none';
                             markerEnd = 'url(#general-specializes)';
                             strokeWidth = '1.5px';
-                        } else if (conn.isTypedBy || conn.type === 'typed by') {
+                        } else if (conn.isTypedBy || conn.type === 'typed by' || conn.type === 'typing') {
                             strokeColor = '#569CD6';
                             strokeDash = '5,3';
                             markerEnd = 'url(#general-typed-by)';
                             strokeWidth = '1.5px';
-                        } else if (conn.isContains || conn.type === 'contains') {
+                        } else if (conn.isContains || conn.type === 'contains' || conn.type === 'containment') {
                             strokeColor = '#4EC9B0';
                             strokeDash = 'none';
                             markerEnd = 'url(#general-contains)';
                             strokeWidth = '1.5px';
-                        } else if (conn.type === 'connect' || conn.type === 'interface') {
+                        } else if (conn.type === 'connect' || conn.type === 'connection' || conn.type === 'interface') {
                             strokeColor = '#D7BA7D';
                             strokeDash = 'none';
                             markerEnd = 'url(#general-connect)';
                             strokeWidth = '2px';
-                        } else if (conn.type === 'bind') {
+                        } else if (conn.type === 'bind' || conn.type === 'binding') {
                             strokeColor = '#808080';
                             strokeDash = '2,2';
                             markerEnd = 'none';
                             strokeWidth = '1px';
-                        } else if (conn.type === 'allocate') {
-                            strokeColor = '#D4D4D4';
+                        } else if (conn.type === 'allocate' || conn.type === 'allocation') {
+                            strokeColor = '#B5CEA8';
                             strokeDash = '8,4';
                             markerEnd = 'url(#general-arrow)';
                             strokeWidth = '1.5px';
@@ -8730,6 +9279,21 @@ export class VisualizationPanel {
                             strokeDash = 'none';
                             markerEnd = 'url(#general-arrow)';
                             strokeWidth = '2px';
+                        } else if (conn.type === 'subsetting' || conn.type === 'redefinition') {
+                            strokeColor = '#CE9178';
+                            strokeDash = '4,2';
+                            markerEnd = 'url(#general-arrow)';
+                            strokeWidth = '1.5px';
+                        } else if (conn.type === 'satisfy' || conn.type === 'verify') {
+                            strokeColor = '#DCDCAA';
+                            strokeDash = '6,3';
+                            markerEnd = 'url(#general-arrow)';
+                            strokeWidth = '1.5px';
+                        } else if (conn.type === 'dependency') {
+                            strokeColor = '#D4D4D4';
+                            strokeDash = '6,3';
+                            markerEnd = 'url(#general-arrow)';
+                            strokeWidth = '1.5px';
                         } else {
                             strokeColor = 'var(--vscode-charts-blue)';
                             strokeDash = 'none';
@@ -10621,13 +11185,17 @@ export class VisualizationPanel {
                     .style('cursor', 'pointer');
 
                 // Part box (main rectangle) - matching General View
+                var _ibdStroke = isLibValidated ? '#4EC9B0' : typeColor;
+                var _ibdStrokeW = isUsage ? '3px' : '2px';
                 partG.append('rect')
                     .attr('width', partWidth)
                     .attr('height', totalHeight)
                     .attr('rx', isUsage ? 8 : 4)  // Rounded for usages, slightly rounded for defs
+                    .attr('data-original-stroke', _ibdStroke)
+                    .attr('data-original-width', _ibdStrokeW)
                     .style('fill', 'var(--vscode-editor-background)')
-                    .style('stroke', isLibValidated ? '#4EC9B0' : typeColor)
-                    .style('stroke-width', isUsage ? '3px' : '2px')
+                    .style('stroke', _ibdStroke)
+                    .style('stroke-width', _ibdStrokeW)
                     .style('stroke-dasharray', isDefinition ? '6,3' : 'none');
 
                 // Type color bar at top (General View style)
@@ -13312,7 +13880,10 @@ export class VisualizationPanel {
                 if (viewDropdownMenu) {
                     viewDropdownMenu.classList.remove('show');
                 }
-                if (selectedView) {
+                if (selectedView === 'dashboard') {
+                    // Open the Model Dashboard panel via VS Code command
+                    vscode.postMessage({ command: 'executeCommand', args: ['sysml.showModelDashboard'] });
+                } else if (selectedView) {
                     changeView(selectedView);
                 }
             });
@@ -13328,18 +13899,147 @@ export class VisualizationPanel {
         document.getElementById('category-headers-btn').addEventListener('click', toggleCategoryHeaders);
         document.getElementById('clear-filter-btn').addEventListener('click', clearSelection);
 
-        // Add diagram selector change handler
-        const diagramSelector = document.getElementById('diagram-selector');
-        if (diagramSelector) {
-            diagramSelector.addEventListener('change', (e) => {
-                selectedDiagramIndex = parseInt(e.target.value, 10) || 0;
-                // Save the selected diagram name for persistence across updates
-                const selectedOption = e.target.options[e.target.selectedIndex];
-                selectedDiagramName = selectedOption ? selectedOption.textContent : null;
-                // Re-render current view with new selection
-                renderVisualization(currentView);
+        // Legend popup toggle
+        (function setupLegend() {
+            const legendBtn = document.getElementById('legend-btn');
+            const legendPopup = document.getElementById('legend-popup');
+            const legendCloseBtn = document.getElementById('legend-close-btn');
+            if (!legendBtn || !legendPopup) return;
+
+            function showLegend() {
+                legendPopup.style.display = 'block';
+                legendPopup.style.top = '12px';
+                legendPopup.style.right = '12px';
+                legendPopup.style.left = '';
+                legendPopup.style.bottom = '';
+                legendBtn.classList.add('active');
+                legendBtn.style.background = 'var(--vscode-button-background)';
+                legendBtn.style.color = 'var(--vscode-button-foreground)';
+            }
+
+            function hideLegend() {
+                legendPopup.style.display = 'none';
+                legendBtn.classList.remove('active');
+                legendBtn.style.background = '';
+                legendBtn.style.color = '';
+            }
+
+            legendBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const showing = legendPopup.style.display === 'block';
+                if (showing) { hideLegend(); } else { showLegend(); }
             });
-        }
+
+            if (legendCloseBtn) {
+                legendCloseBtn.addEventListener('click', () => { hideLegend(); });
+            }
+
+            // Hide legend when clicking outside
+            document.addEventListener('click', (e) => {
+                if (legendPopup.style.display === 'block' &&
+                    !legendPopup.contains(e.target) &&
+                    !legendBtn.contains(e.target)) {
+                    hideLegend();
+                }
+            });
+        })();
+
+        // Legend drag support
+        (function setupLegendDrag() {
+            const legendPopup = document.getElementById('legend-popup');
+            const legendHeader = document.getElementById('legend-header');
+            if (!legendPopup || !legendHeader) return;
+
+            let isDragging = false;
+            let dragStartX = 0;
+            let dragStartY = 0;
+            let popupStartLeft = 0;
+            let popupStartTop = 0;
+
+            legendHeader.addEventListener('mousedown', (e) => {
+                if (e.target.id === 'legend-close-btn') return;
+                isDragging = true;
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+                const rect = legendPopup.getBoundingClientRect();
+                const wrapperRect = legendPopup.parentElement.getBoundingClientRect();
+                popupStartLeft = rect.left - wrapperRect.left;
+                popupStartTop = rect.top - wrapperRect.top;
+                legendPopup.style.right = '';
+                legendPopup.style.left = popupStartLeft + 'px';
+                legendPopup.style.top = popupStartTop + 'px';
+                legendHeader.style.cursor = 'grabbing';
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                const dx = e.clientX - dragStartX;
+                const dy = e.clientY - dragStartY;
+                legendPopup.style.left = (popupStartLeft + dx) + 'px';
+                legendPopup.style.top = (popupStartTop + dy) + 'px';
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (isDragging) {
+                    isDragging = false;
+                    legendHeader.style.cursor = 'grab';
+                }
+            });
+        })();
+
+        // About popup modal
+        (function setupAboutPopup() {
+            const aboutBtn = document.getElementById('about-btn');
+            const aboutBackdrop = document.getElementById('about-backdrop');
+            const aboutCloseBtn = document.getElementById('about-close-btn');
+            const aboutRateLink = document.getElementById('about-rate-link');
+            const aboutRepoLink = document.getElementById('about-repo-link');
+            if (!aboutBtn || !aboutBackdrop) return;
+
+            aboutBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                aboutBackdrop.classList.toggle('show');
+            });
+
+            if (aboutCloseBtn) {
+                aboutCloseBtn.addEventListener('click', () => {
+                    aboutBackdrop.classList.remove('show');
+                });
+            }
+
+            aboutBackdrop.addEventListener('click', (e) => {
+                if (e.target === aboutBackdrop) {
+                    aboutBackdrop.classList.remove('show');
+                }
+            });
+
+            if (aboutRateLink) {
+                aboutRateLink.addEventListener('click', () => {
+                    vscode.postMessage({ command: 'openExternal', url: 'https://marketplace.visualstudio.com/items?itemName=JamieD.sysml-v2-support' });
+                });
+            }
+
+            if (aboutRepoLink) {
+                aboutRepoLink.addEventListener('click', () => {
+                    vscode.postMessage({ command: 'openExternal', url: 'https://github.com/daltskin/VSCode_SysML_Extension' });
+                });
+            }
+        })();
+
+        // Package dropdown toggle handler
+        (function setupPkgDropdown() {
+            const pkgBtn = document.getElementById('pkg-dropdown-btn');
+            const pkgMenu = document.getElementById('pkg-dropdown-menu');
+            if (!pkgBtn || !pkgMenu) return;
+
+            pkgBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                pkgMenu.classList.toggle('show');
+                // Close view dropdown if open
+                if (viewDropdownMenu) viewDropdownMenu.classList.remove('show');
+            });
+        })();
 
         // Add export dropdown functionality
     const exportBtn = document.getElementById('export-btn');
@@ -13383,6 +14083,12 @@ export class VisualizationPanel {
                 !viewDropdownMenu.contains(e.target)) {
                 viewDropdownMenu.classList.remove('show');
             }
+            // Close pkg dropdown
+            const pkgBtn = document.getElementById('pkg-dropdown-btn');
+            const pkgMenu = document.getElementById('pkg-dropdown-menu');
+            if (pkgBtn && pkgMenu && !pkgBtn.contains(e.target) && !pkgMenu.contains(e.target)) {
+                pkgMenu.classList.remove('show');
+            }
         });
 
         // Handle export menu item clicks
@@ -13416,6 +14122,43 @@ export class VisualizationPanel {
             });
         });
 
+        // ── Easter egg ─────────────────────────────────────────────
+        (function initEasterEgg() {
+            var egg = document.getElementById('ee-egg');
+            var trigger = document.getElementById('legend-btn');
+            if (!egg || !trigger) return;
+
+            var hoverTimer = null;
+            var HOLD_MS = 3000; // hold 3 seconds to reveal
+            var revealed = false;
+
+            trigger.addEventListener('mouseenter', function () {
+                if (revealed) return;
+                hoverTimer = setTimeout(function () {
+                    revealed = true;
+                    egg.classList.add('revealed');
+                    // little wobble on first appearance
+                    egg.classList.add('hatch');
+                    egg.addEventListener('animationend', function () {
+                        egg.classList.remove('hatch');
+                    }, { once: true });
+                }, HOLD_MS);
+            });
+
+            trigger.addEventListener('mouseleave', function () {
+                if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+            });
+
+            egg.addEventListener('click', function () {
+                egg.textContent = '🐣';
+                egg.classList.add('hatch');
+                egg.addEventListener('animationend', function () {
+                    egg.classList.remove('hatch');
+                }, { once: true });
+                vscode.postMessage({ command: 'executeCommand', args: ['sysml.showSysRunner'] });
+            });
+        })();
+
         // Signal to the extension host that the webview is (re)initialized
         // so it can push the current model data (e.g. after being dragged
         // to a floating window which may recreate the iframe).
@@ -13424,4 +14167,14 @@ export class VisualizationPanel {
 </body>
 </html>`;
     }
+}
+
+/** Generate a random nonce for Content Security Policy. */
+function _getNonce(): string {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let nonce = '';
+    for (let i = 0; i < 32; i++) {
+        nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return nonce;
 }

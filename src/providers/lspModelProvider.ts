@@ -79,7 +79,7 @@ export class LspModelProvider {
 
         // Retry with exponential back-off when the server hasn't
         // finished parsing yet (returns 0 elements).
-        const retryDelays = [1000, 3000, 8000]; // ms
+        const retryDelays = [500, 1500, 4000]; // ms
         let result: SysMLModelResult;
 
         for (let attempt = 0; ; attempt++) {
@@ -154,4 +154,52 @@ export class LspModelProvider {
         }
         return undefined;
     }
+
+    /**
+     * Fetch server health / memory stats from the `sysml/serverStats` endpoint.
+     * Returns `undefined` if the request fails (e.g. server not ready).
+     */
+    async getServerStats(): Promise<LspServerStats | undefined> {
+        try {
+            return await this._client.sendRequest<LspServerStats>('sysml/serverStats');
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * Ask the LSP server to flush all in-memory caches.
+     * Returns the number of evicted entries per cache, or `undefined` on failure.
+     */
+    async clearServerCaches(): Promise<ClearCacheResult | undefined> {
+        try {
+            return await this._client.sendRequest<ClearCacheResult>('sysml/clearCache');
+        } catch {
+            return undefined;
+        }
+    }
+}
+
+/** Shape returned by the `sysml/clearCache` custom LSP request. */
+export interface ClearCacheResult {
+    documents: number;
+    symbolTables: number;
+    semanticTokens: number;
+}
+
+/** Shape returned by the `sysml/serverStats` custom LSP request. */
+export interface LspServerStats {
+    /** Server uptime in seconds. */
+    uptime: number;
+    memory: {
+        heapUsed: number;   // MB
+        heapTotal: number;  // MB
+        rss: number;        // MB
+        external: number;   // MB
+    };
+    caches: {
+        documents: number;
+        symbolTables: number;
+        semanticTokens: number;
+    };
 }

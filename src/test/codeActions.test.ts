@@ -1,8 +1,11 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 
+const _isUnitTest = (vscode as any)._isMock === true;
+
 suite('SysML Code Actions', () => {
     test('Offers Quick Fix to replace invalid keyword with package', async function() {
+        if (_isUnitTest) { return this.skip(); } // needs real code-action provider
         this.timeout(10000);
 
         const content = `packageasdf Test {
@@ -36,6 +39,7 @@ suite('SysML Code Actions', () => {
     });
 
     test('Offers Quick Fix to replace invalid keyword with attribute', async function() {
+        if (_isUnitTest) { return this.skip(); } // needs real code-action provider
         this.timeout(10000);
 
         const content = `attributex foo: String;`;
@@ -65,6 +69,7 @@ suite('SysML Code Actions', () => {
     });
 
     test('Offers Quick Fix for squashed multi-word keyword (partdef -> part def)', async function() {
+        if (_isUnitTest) { return this.skip(); } // needs real code-action provider
         this.timeout(10000);
 
         const content = `partdef Wheel {\n}`;
