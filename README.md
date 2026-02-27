@@ -29,6 +29,7 @@ All language features are provided by the [sysml-v2-lsp](https://www.npmjs.com/p
 - **Type Hierarchy** — View supertypes and subtypes of definitions
 - **Call Hierarchy** — Trace incoming and outgoing action/state invocations
 - **Inlay Hints** — Inline type annotations next to identifiers (opt-in, off by default)
+- **Snippets** — 29 code snippets for rapid scaffolding (`partdef`, `part`, `package`, `attrdef`, `portdef`, `actiondef`, `statedef`, `reqdef`, `enumdef`, `connect`, `flow`, `import`, and more)
 
 ### Tooling
 
@@ -42,6 +43,19 @@ All language features are provided by the [sysml-v2-lsp](https://www.npmjs.com/p
 - **Diagnostic-Reactive Status Bar** — Live error/warning counts with colour-coded icons; click to open the Problems panel
 - **LSP Server Health** — Status bar tooltip showing uptime, memory usage, and cache statistics
 - **MCP Server** — Built-in [Model Context Protocol](https://modelcontextprotocol.io/) server for Copilot agent mode integration, enabling AI-assisted SysML modelling
+
+### Workspace Support
+
+When you open a **multi-root workspace** (`.code-workspace` file), the extension automatically scans all `.sysml` files across every folder and opens them for the LSP server to parse. This enables:
+
+- **Cross-file navigation** — Go to Definition, Find References, and Rename work across all files in the workspace
+- **Workspace-wide Model Explorer** — The tree view aggregates packages and elements from every file, with two modes:
+  - **By File** — elements grouped under their source file
+  - **Semantic Model** — a unified view merging all packages into a single model tree
+- **Background pre-parsing** — configurable via `sysml.workspace.preloadOnOpen` (default: `workspaceOnly`)
+- **Exclude patterns** — skip directories from scanning via `sysml.workspace.excludePatterns` (e.g. `temp`, `archive`)
+
+For single-folder workspaces, files are parsed lazily when opened.
 
 ## Demo
 
@@ -89,7 +103,7 @@ Or install manually from `.vsix`: Extensions → ⋯ → Install from VSIX
 
 ## Usage
 
-Create `.sysml` or `.kerml` files:
+Create `.sysml` or `.kerml` files — the extension activates automatically and provides full language support for both:
 
 ```sysml
 package MySystem {
@@ -128,6 +142,8 @@ Right-click any folder in the Explorer → **Visualise with SysML** to aggregate
 Right-click in a SysML file editor → **Show Feature Inspector** to inspect the element at the cursor.
 
 Right-click a `.sysml` file or folder → **Show Model Dashboard** for statistics and complexity analysis.
+
+Right-click a package node in the **SysML Model Explorer** → **Visualize Package** to open an isolated diagram for that package.
 
 ## Settings
 

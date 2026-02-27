@@ -113,6 +113,21 @@
             "comment": "keyword def Name — name is a type definition (teal/green in Dark+)",
             "patterns": [
                 {
+                    "comment": "Compound: use case def Name",
+                    "match": "\\b(use\\s+case)\\s+(def)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.other.definition.sysml"
+                        },
+                        "2": {
+                            "name": "storage.type.def.sysml"
+                        },
+                        "3": {
+                            "name": "entity.name.type.sysml"
+                        }
+                    }
+                },
+                {
                     "match": "\\b(package|part|port|item|attribute|action|calc|state|constraint|requirement|concern|case|analysis|verification|view|viewpoint|rendering|metadata|enum|allocation|connection|interface|occurrence|individual|flow|binding|succession)\\s+(def)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
                     "captures": {
                         "1": {
@@ -131,6 +146,81 @@
         "usage-declarations": {
             "comment": "keyword name (without def) — names get role-appropriate scopes",
             "patterns": [
+                {
+                    "comment": "include use case name — include relationship",
+                    "match": "\\b(include)\\s+(use)\\s+(case)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.control.sysml"
+                        },
+                        "2": {
+                            "name": "keyword.other.definition.sysml"
+                        },
+                        "3": {
+                            "name": "keyword.other.definition.sysml"
+                        },
+                        "4": {
+                            "name": "variable.other.member.sysml"
+                        }
+                    }
+                },
+                {
+                    "comment": "use case name (without def)",
+                    "match": "\\b(use)\\s+(case)\\s+(?!def\\b)([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.other.definition.sysml"
+                        },
+                        "2": {
+                            "name": "keyword.other.definition.sysml"
+                        },
+                        "3": {
+                            "name": "variable.other.member.sysml"
+                        }
+                    }
+                },
+                {
+                    "comment": "perform action name",
+                    "match": "\\b(perform)\\s+(action)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.control.sysml"
+                        },
+                        "2": {
+                            "name": "keyword.other.definition.sysml"
+                        },
+                        "3": {
+                            "name": "entity.name.function.sysml"
+                        }
+                    }
+                },
+                {
+                    "comment": "exhibit state name",
+                    "match": "\\b(exhibit)\\s+(state)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.control.sysml"
+                        },
+                        "2": {
+                            "name": "keyword.other.definition.sysml"
+                        },
+                        "3": {
+                            "name": "variable.other.member.sysml"
+                        }
+                    }
+                },
+                {
+                    "comment": "actor/subject name — participant (light blue in Dark+)",
+                    "match": "\\b(actor|subject)\\s+([a-zA-Z_][a-zA-Z0-9_]*)(?!\\s+def\\b)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.other.definition.sysml"
+                        },
+                        "2": {
+                            "name": "variable.other.member.sysml"
+                        }
+                    }
+                },
                 {
                     "comment": "package/namespace Name — namespace (teal in Dark+)",
                     "match": "\\b(package|namespace|library)\\s+([a-zA-Z_][a-zA-Z0-9_]*)(?!\\s+def\\b)",
@@ -182,9 +272,22 @@
             ]
         },
         "type-annotations": {
-            "comment": "': TypeName' — PascalCase identifiers after colon are type references",
+            "comment": "Type references after colon or specialization operators",
             "patterns": [
                 {
+                    "comment": "':> TypeName' or ':>> TypeName' — specialization/redefinition",
+                    "match": "(:>>|:>)\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.operator.sysml"
+                        },
+                        "2": {
+                            "name": "entity.name.type.sysml"
+                        }
+                    }
+                },
+                {
+                    "comment": "': TypeName' — PascalCase identifiers after colon are type references",
                     "match": "(:)\\s*([A-Z][a-zA-Z0-9_]*)",
                     "captures": {
                         "1": {
@@ -218,7 +321,7 @@
             "patterns": [
                 {
                     "name": "keyword.other.definition.sysml",
-                    "match": "\\b(package|part|port|item|attribute|action|calc|state|constraint|requirement|concern|case|analysis|verification|view|viewpoint|rendering|metadata|comment|doc|alias|namespace|library|allocation|connection|interface|binding|succession|flow|use|import|expose|dependency|stakeholder|enum|occurrence|individual|snapshot|timeslice|multiplicity|feature|type|def)\\b"
+                    "match": "\\b(package|part|port|item|attribute|action|calc|state|constraint|requirement|concern|case|analysis|verification|view|viewpoint|rendering|metadata|comment|doc|alias|namespace|library|allocation|connection|interface|binding|succession|flow|use|import|expose|dependency|stakeholder|enum|occurrence|individual|snapshot|timeslice|multiplicity|feature|type|def|actor|event|connect|allocate|bind)\\b"
                 }
             ]
         },

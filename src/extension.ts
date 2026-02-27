@@ -30,6 +30,13 @@ let parseAnimFrame = 0;
 let lastMetricsStats: Parameters<typeof updateModelMetrics>[0] | undefined;
 let lastMetricsUri: vscode.Uri | undefined;
 
+/**
+ * Per-file metrics cache so switching back to a previously-parsed
+ * SysML file shows status-bar data instantly instead of waiting for
+ * the debounce + LSP roundtrip.
+ */
+const metricsCache = new Map<string, Parameters<typeof updateModelMetrics>[0]>();
+
 /** Available visualization views — matches the webview's dropdown options */
 const visualizationViews = [
     { id: 'elk',       label: '◆ General',          description: 'General view with auto-layout' },
@@ -108,13 +115,13 @@ function parseSysMLDocument(document: vscode.TextDocument, options?: { skipProgr
             // visualization) which can add noticeable latency.
             hideParseProgress();
 
-            // Bail out if cancelled or closed during model explorer parse
-            if (cancelSource.token.isCancellationRequested || document.isClosed) {
-                outputChannel?.appendLine(`parseSysMLDocument: cancelled after model explorer update`);
-                return;
-            }
-
             // --- Status-bar model metrics ---
+            // Update metrics BEFORE the cancellation check so the status
+            // bar always reflects the latest available data.  When a new
+            // parse was queued (e.g. from notifyServerParseDone) the
+            // cancelSource is cancelled, but the model explorer may
+            // already hold valid stats that should be displayed.  The
+            // next parse will override with fresh data if needed.
             const stats = modelExplorerProvider.getLastStats();
             if (stats) {
                 // Fetch LSP server health info (non-blocking, best-effort)
@@ -122,6 +129,15 @@ function parseSysMLDocument(document: vscode.TextDocument, options?: { skipProgr
                     lastServerStats = await lspModelProvider.getServerStats();
                 } catch { /* non-critical */ }
                 updateModelMetrics(stats, document.uri);
+            }
+
+            // Bail out if cancelled or closed — skip the remaining
+            // secondary UI updates (Feature Inspector, Visualization)
+            // which are more expensive and will be retried by the
+            // follow-up parse.
+            if (cancelSource.token.isCancellationRequested || document.isClosed) {
+                outputChannel?.appendLine(`parseSysMLDocument: cancelled after model explorer update`);
+                return;
             }
 
             // Push resolved types to Feature Inspector and Feature Explorer
@@ -203,6 +219,11 @@ export function updateModelMetrics(stats: {
     // Cache latest args so the diagnostic-change listener can re-call us.
     lastMetricsStats = stats;
     lastMetricsUri = documentUri;
+
+    // Persist in per-file cache for instant restore on tab switch
+    if (documentUri) {
+        metricsCache.set(documentUri.toString(), stats);
+    }
 
     // Count real diagnostics (errors/warnings) for the current file
     const diagnostics = documentUri
@@ -310,6 +331,26 @@ export function updateModelMetrics(stats: {
 export function hideModelMetrics(): void {
     modelMetricsItem?.hide();
     lastMetricsKey = undefined;
+}
+
+/**
+ * Show a lightweight "loading" placeholder in the metrics status bar
+ * while the LSP server processes a freshly-opened SysML file that
+ * has no cached metrics yet.
+ */
+function showMetricsLoading(document: vscode.TextDocument): void {
+    if (!modelMetricsItem) {
+        modelMetricsItem = vscode.window.createStatusBarItem(
+            vscode.StatusBarAlignment.Right, 100,
+        );
+        modelMetricsItem.name = 'SysML Model Metrics';
+        modelMetricsItem.command = 'workbench.actions.view.problems';
+    }
+    const fileName = document.fileName.split('/').pop() || 'file';
+    modelMetricsItem.text = '$(loading~spin) SysML: Loading…';
+    modelMetricsItem.tooltip = `Parsing ${fileName}…`;
+    modelMetricsItem.backgroundColor = undefined;
+    modelMetricsItem.show();
 }
 
 /**
@@ -428,7 +469,7 @@ export function activate(context: vscode.ExtensionContext) {
     // discover SysML tools even before a .sysml file is opened.
     const mcpServerPath = path.join(
         context.extensionPath, 'node_modules', 'sysml-v2-lsp',
-        'dist', 'server', 'mcpServer.mjs'
+        'dist', 'server', 'mcpServer.js'
     );
     if (fs.existsSync(mcpServerPath)) {
         const emitter = new vscode.EventEmitter<void>();
@@ -1116,11 +1157,26 @@ export function activate(context: vscode.ExtensionContext) {
             outputChannel.appendLine(`onDidChangeActiveTextEditor: ${editor ? editor.document.fileName : 'none'} (lang: ${editor?.document.languageId ?? 'N/A'})`);
             if (editor && editor.document.languageId === 'sysml') {
                 vscode.commands.executeCommand('setContext', 'sysml.modelLoaded', true);
+
+                // Show status bar immediately — use cached metrics if
+                // available, otherwise show a "loading" placeholder.
+                const cachedStats = metricsCache.get(editor.document.uri.toString());
+                if (cachedStats) {
+                    updateModelMetrics(cachedStats, editor.document.uri);
+                } else {
+                    showMetricsLoading(editor.document);
+                }
+
                 parseSysMLDocument(editor.document);
-            } else if (vscode.workspace.workspaceFile && !modelExplorerProvider.isWorkspaceMode()) {
-                // No SysML file active and workspace model not yet loaded —
-                // show the workspace-wide model (only when a .code-workspace is open)
-                loadWorkspaceSysMLFiles();
+            } else {
+                // Switched away from SysML — hide metrics immediately
+                hideModelMetrics();
+
+                if (vscode.workspace.workspaceFile && !modelExplorerProvider.isWorkspaceMode()) {
+                    // No SysML file active and workspace model not yet loaded —
+                    // show the workspace-wide model (only when a .code-workspace is open)
+                    loadWorkspaceSysMLFiles();
+                }
             }
         })
     );
@@ -1130,6 +1186,9 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.workspace.onDidCloseTextDocument(document => {
             if (document.languageId === 'sysml') {
+                // Evict from per-file metrics cache
+                metricsCache.delete(document.uri.toString());
+
                 // Clear debounce timer so a pending parse doesn't start
                 // after the document is already gone
                 if (parseDebounceTimer) {

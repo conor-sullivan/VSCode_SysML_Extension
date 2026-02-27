@@ -291,7 +291,11 @@ export class VisualizationPanel {
                 this._pendingPackageName = undefined;
             }
             this._panel.webview.postMessage(msg);
-        } catch { /* LSP model request failed — silently ignore */ }
+        } catch {
+            // LSP model request failed — hide the loading overlay so the
+            // webview doesn't stay stuck on "Parsing SysML model...".
+            this._panel.webview.postMessage({ command: 'hideLoading' });
+        }
     }
 
     /**
@@ -770,7 +774,7 @@ export class VisualizationPanel {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}' 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource}; worker-src blob:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource}; worker-src blob:;">
     <title>SysML Model Visualizer</title>
     <script nonce="${nonce}" src="${d3Uri}"></script>
     <script nonce="${nonce}" src="${elkUri}"></script>
@@ -1645,22 +1649,12 @@ export class VisualizationPanel {
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 8px; font-size: 12px; line-height: 1.5;">
                     <p style="margin: 0;">A comprehensive SysML v2.0 language support extension for VS Code with syntax highlighting, formatting, validation, navigation, and interactive visualizations.</p>
-                    <div style="margin-top: 4px;">
-                        <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; margin-bottom: 6px;">Features</div>
-                        <ul style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px;">
-                            <li>Multiple diagram views (General, Interconnection, Activity, State, Sequence)</li>
-                            <li>Model Dashboard with metrics and analysis</li>
-                            <li>Drag-and-drop legend and minimap</li>
-                            <li>Export to PNG, SVG, JSON</li>
-                            <li>Syntax highlighting and code formatting</li>
-                        </ul>
-                    </div>
                     <div style="display: flex; gap: 10px; margin-top: 8px;">
                         <button id="about-rate-link" class="action-btn" style="font-size: 11px; cursor: pointer;" title="Rate on marketplace">⭐ Rate</button>
                         <button id="about-repo-link" class="action-btn" style="font-size: 11px; cursor: pointer;" title="View source on GitHub">🔗 GitHub</button>
                     </div>
                     <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--vscode-panel-border); font-size: 10px; opacity: 0.6; text-align: center;">
-                        v\${this._extensionVersion} · Made with ❤️ for the SysML community
+                        v${this._extensionVersion} · Made with ❤️ for the SysML v2 community
                     </div>
                 </div>
             </div>
@@ -2334,25 +2328,30 @@ export class VisualizationPanel {
                     });
 
                     // 2. Create connectors from part typing relationships
-                    // When a part has a typing attribute, show connection to that type
+                    // When a part has typing attributes, show connections to those types
                     ibdParts.forEach(part => {
-                        if (part.typing && part.typing !== part.name) {
-                            // Find the typed element
-                            const typedElement = allElements.find(el =>
-                                el.name === part.typing || el.id === part.typing
-                            );
+                        const types = (part.typings && part.typings.length > 0)
+                            ? part.typings
+                            : (part.typing ? [part.typing] : []);
 
-                            if (typedElement) {
-                                ibdConnectors.push({
-                                    source: part.name,
-                                    target: typedElement.name,
-                                    sourceId: part.name,
-                                    targetId: typedElement.name,
-                                    type: 'typing',
-                                    name: 'type'
-                                });
+                        types.forEach(typeName => {
+                            if (typeName && typeName !== part.name) {
+                                const typedElement = allElements.find(el =>
+                                    el.name === typeName || el.id === typeName
+                                );
+
+                                if (typedElement) {
+                                    ibdConnectors.push({
+                                        source: part.name,
+                                        target: typedElement.name,
+                                        sourceId: part.name,
+                                        targetId: typedElement.name,
+                                        type: 'typing',
+                                        name: 'type'
+                                    });
+                                }
                             }
-                        }
+                        });
                     });
 
                     // 3. Look for attribute/property relationships

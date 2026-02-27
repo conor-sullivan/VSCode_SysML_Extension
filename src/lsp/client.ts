@@ -143,26 +143,28 @@ export function startLanguageClient(
         clientOptions
     );
 
+    // Register the sysml/status notification handler BEFORE start()
+    // so notifications sent during initial document sync (which
+    // happens inside start()) are never dropped.  Previously the
+    // handler was registered inside start().then(), creating a race
+    // where the server's sysml/status 'end' notification arrived
+    // before the handler was in place — causing notifyServerParseDone
+    // to never fire and the status bar to stay empty.
+    client.onNotification('sysml/status', (params: SysMLStatusParams) => {
+        const ext = require('../extension');
+        if (params.state === 'begin' || params.state === 'progress') {
+            ext.showParseProgress(params.fileName ?? params.message ?? 'Working');
+        } else if (params.state === 'end') {
+            ext.hideParseProgress();
+            // Re-trigger model fetch now that the server
+            // has finished parsing this file.
+            ext.notifyServerParseDone(params.uri);
+        }
+    });
+
     client.start().then(
         () => {
             outputChannel.appendLine('SysML v2 language server started successfully');
-
-            // Listen for sysml/status notifications to drive the
-            // "Parsing …" status-bar indicator and re-fetch model
-            // data once parsing completes (cold-start fix).
-            if (client) {
-                client.onNotification('sysml/status', (params: SysMLStatusParams) => {
-                    const ext = require('../extension');
-                    if (params.state === 'begin' || params.state === 'progress') {
-                        ext.showParseProgress(params.fileName ?? params.message ?? 'Working');
-                    } else if (params.state === 'end') {
-                        ext.hideParseProgress();
-                        // Re-trigger model fetch now that the server
-                        // has finished parsing this file.
-                        ext.notifyServerParseDone(params.uri);
-                    }
-                });
-            }
         },
         (err) => {
             const msg = `Failed to start SysML language server: ${err}`;

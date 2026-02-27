@@ -268,12 +268,17 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<vscode.Tre
                 cancellationToken,
             );
 
+            // Always capture stats for the status-bar metrics feature,
+            // even if the parse was cancelled.  This ensures the status
+            // bar can display the latest data immediately rather than
+            // waiting for a follow-up parse from notifyServerParseDone.
+            if (result.stats) {
+                this._lastStats = result.stats;
+            }
+
             if (cancellationToken?.isCancellationRequested || document.isClosed) {
                 return;
             }
-
-            // Capture stats for the status-bar metrics feature
-            this._lastStats = result.stats;
 
             // Convert DTOs → SysMLElement so tree items work unchanged
             this.rootElements = (result.elements ?? []).map(dtoToSysMLElement);
