@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { LspModelProvider, toVscodeRange } from '../providers/lspModelProvider';
 import type { SysMLElementDTO } from '../providers/sysmlModelTypes';
 import type { SysMLElement } from '../types/sysmlTypes';
+import { loadLayout, saveLayout } from '../storage/layoutStorage';
 
 export class VisualizationPanel {
     public static currentPanel: VisualizationPanel | undefined;
@@ -121,6 +122,11 @@ export class VisualizationPanel {
                         // Webview (re)initialized — push current model data
                         this._lastContentHash = '';
                         this.updateVisualization(true);
+                        break;
+                    case 'savePositions':
+                        if (message.view && message.positions) {
+                            saveLayout(this._document.uri, message.view, message.positions);
+                        }
                         break;
                 }
             },
@@ -278,6 +284,8 @@ export class VisualizationPanel {
             // shape the webview expects (add id / properties / typing).
             const jsonElements = this.convertDTOElementsToJSON(mergedElements);
 
+            const savedLayout = await loadLayout(this._document.uri);
+
             const msg: Record<string, unknown> = {
                 command: 'update',
                 elements: jsonElements,
@@ -286,6 +294,9 @@ export class VisualizationPanel {
                 activityDiagrams: allActivityDiagrams,
                 currentView: this._currentView,
             };
+            if (savedLayout) {
+                msg.savedPositions = savedLayout.layouts;
+            }
             if (this._pendingPackageName) {
                 msg.pendingPackageName = this._pendingPackageName;
                 this._pendingPackageName = undefined;
@@ -8562,6 +8573,11 @@ export class VisualizationPanel {
                     return sections;
                 }
 
+                // Retrieve any previously saved positions for this view
+                var savedElkPositions = (currentData && currentData.savedPositions && currentData.savedPositions.elk)
+                    ? currentData.savedPositions.elk.positions
+                    : null;
+
                 // Calculate positions with proper grid layout (no overlapping)
                 var nodePositions = new Map();
                 var portPositions = new Map();
@@ -8642,9 +8658,14 @@ export class VisualizationPanel {
                             y += groupRowHeights[r] + vSpacing;
                         }
 
+                        var computedX = padding + col * (nodeWidth + hSpacing);
+                        var computedY = y;
+
+                        // Use saved position if one exists for this element
+                        var saved = savedElkPositions && savedElkPositions[nd.el.name];
                         nodePositions.set(nd.el.name, {
-                            x: padding + col * (nodeWidth + hSpacing),
-                            y: y,
+                            x: saved ? saved.x : computedX,
+                            y: saved ? saved.y : computedY,
                             width: nodeWidth,
                             height: nd.height,
                             element: nd.el,
@@ -8952,6 +8973,17 @@ export class VisualizationPanel {
                         })
                         .on('end', function(event) {
                             d3.select(this).style('cursor', 'grab');
+
+                            // Persist all current positions to the layout file
+                            var positionsToSave = {};
+                            nodePositions.forEach(function(p, elName) {
+                                positionsToSave[elName] = { x: p.x, y: p.y };
+                            });
+                            vscode.postMessage({
+                                command: 'savePositions',
+                                view: 'elk',
+                                positions: positionsToSave
+                            });
                         });
                     nodeG.call(generalDrag);
 

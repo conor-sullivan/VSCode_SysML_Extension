@@ -27,7 +27,7 @@
   "files.insertFinalNewline": true,
   "npm.enableScriptExplorer": true,
   "debug.allowBreakpointsEverywhere": true,
-  "extensions.ignoreRecommendations": false,
+  "extensions.ignoreRecommendations": true,
   "workbench.editor.enablePreview": false,
   "editor.minimap.enabled": false,
   "explorer.confirmDelete": false,

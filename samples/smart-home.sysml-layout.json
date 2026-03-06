@@ -1,0 +1,489 @@
+{
+  "version": 1,
+  "layouts": {
+    "elk": {
+      "positions": {
+        "SmartHome": {
+          "x": -203.10984802246094,
+          "y": 145.45230102539062
+        },
+        "lightingSystem": {
+          "x": 377.6419677734375,
+          "y": -52.280128479003906
+        },
+        "securitySystem": {
+          "x": 380,
+          "y": 3063
+        },
+        "climateSystem": {
+          "x": 560,
+          "y": 45
+        },
+        "entertainmentSystem": {
+          "x": 740,
+          "y": 45
+        },
+        "energySystem": {
+          "x": 740,
+          "y": 3063
+        },
+        "networkSystem": {
+          "x": 1100,
+          "y": 45
+        },
+        "LightingSystem": {
+          "x": 1280,
+          "y": 45
+        },
+        "smartBulbs": {
+          "x": 1460,
+          "y": 45
+        },
+        "dimmers": {
+          "x": 99.30445861816406,
+          "y": -144.6127166748047
+        },
+        "motionSensors": {
+          "x": -18.880287170410156,
+          "y": 303.7218017578125
+        },
+        "lightSwitches": {
+          "x": 380,
+          "y": 272
+        },
+        "SecuritySystem": {
+          "x": 560,
+          "y": 272
+        },
+        "cameras": {
+          "x": 740,
+          "y": 272
+        },
+        "doorLocks": {
+          "x": 920,
+          "y": 272
+        },
+        "windowSensors": {
+          "x": 1100,
+          "y": 272
+        },
+        "alarmSiren": {
+          "x": 1280,
+          "y": 272
+        },
+        "securityPanel": {
+          "x": 1460,
+          "y": 272
+        },
+        "ClimateControl": {
+          "x": -308.84912109375,
+          "y": 496.59820556640625
+        },
+        "thermostat": {
+          "x": 200,
+          "y": 504
+        },
+        "hvacSystem": {
+          "x": 380,
+          "y": 504
+        },
+        "temperatureSensors": {
+          "x": 560,
+          "y": 504
+        },
+        "humiditySensors": {
+          "x": 740,
+          "y": 504
+        },
+        "smartVents": {
+          "x": 920,
+          "y": 504
+        },
+        "Entertainment": {
+          "x": 1100,
+          "y": 504
+        },
+        "smartTV": {
+          "x": 1280,
+          "y": 504
+        },
+        "speakers": {
+          "x": 1460,
+          "y": 504
+        },
+        "streamingDevices": {
+          "x": 20,
+          "y": 762
+        },
+        "gamingConsoles": {
+          "x": 200,
+          "y": 762
+        },
+        "EnergyManagement": {
+          "x": 380,
+          "y": 762
+        },
+        "smartMeter": {
+          "x": 560,
+          "y": 762
+        },
+        "solarPanels": {
+          "x": 740,
+          "y": 762
+        },
+        "batteryStorage": {
+          "x": 920,
+          "y": 762
+        },
+        "smartOutlets": {
+          "x": 1100,
+          "y": 762
+        },
+        "HomeNetwork": {
+          "x": 1280,
+          "y": 762
+        },
+        "router": {
+          "x": 1460,
+          "y": 762
+        },
+        "accessPoints": {
+          "x": 20,
+          "y": 1007
+        },
+        "ethernetSwitch": {
+          "x": 200,
+          "y": 1007
+        },
+        "devices": {
+          "x": 380,
+          "y": 1007
+        },
+        "SmartBulb": {
+          "x": 560,
+          "y": 1007
+        },
+        "Dimmer": {
+          "x": 740,
+          "y": 1007
+        },
+        "MotionSensor": {
+          "x": 920,
+          "y": 1007
+        },
+        "SmartSwitch": {
+          "x": 1100,
+          "y": 1007
+        },
+        "SecurityCamera": {
+          "x": 1280,
+          "y": 1007
+        },
+        "SmartLock": {
+          "x": 1460,
+          "y": 1007
+        },
+        "WindowSensor": {
+          "x": 20,
+          "y": 1182
+        },
+        "SmartThermostat": {
+          "x": 200,
+          "y": 1182
+        },
+        "HVACSystem": {
+          "x": 380,
+          "y": 1182
+        },
+        "furnace": {
+          "x": 560,
+          "y": 1182
+        },
+        "airConditioner": {
+          "x": 740,
+          "y": 1182
+        },
+        "ventilationFan": {
+          "x": 920,
+          "y": 1182
+        },
+        "Homeowner": {
+          "x": 1100,
+          "y": 1182
+        },
+        "SecurityService": {
+          "x": 1280,
+          "y": 1182
+        },
+        "UtilityCompany": {
+          "x": 1460,
+          "y": 1182
+        },
+        "AlarmSiren": {
+          "x": 20,
+          "y": 1370
+        },
+        "SecurityPanel": {
+          "x": 200,
+          "y": 1370
+        },
+        "TempSensor": {
+          "x": 380,
+          "y": 1370
+        },
+        "HumiditySensor": {
+          "x": 560,
+          "y": 1370
+        },
+        "SmartVent": {
+          "x": 740,
+          "y": 1370
+        },
+        "SmartTV": {
+          "x": 920,
+          "y": 1370
+        },
+        "SmartSpeaker": {
+          "x": 1100,
+          "y": 1370
+        },
+        "StreamingDevice": {
+          "x": 1280,
+          "y": 1370
+        },
+        "GamingConsole": {
+          "x": 1460,
+          "y": 1370
+        },
+        "SmartMeter": {
+          "x": 20,
+          "y": 1514
+        },
+        "SolarPanel": {
+          "x": 200,
+          "y": 1514
+        },
+        "HomeBattery": {
+          "x": 380,
+          "y": 1514
+        },
+        "SmartOutlet": {
+          "x": 560,
+          "y": 1514
+        },
+        "WiFiRouter": {
+          "x": 740,
+          "y": 1514
+        },
+        "WiFiAccessPoint": {
+          "x": 920,
+          "y": 1514
+        },
+        "EthernetSwitch": {
+          "x": 1100,
+          "y": 1514
+        },
+        "ConnectedDevice": {
+          "x": 1280,
+          "y": 1514
+        },
+        "Furnace": {
+          "x": 1460,
+          "y": 1514
+        },
+        "AirConditioner": {
+          "x": 20,
+          "y": 1658
+        },
+        "Fan": {
+          "x": 200,
+          "y": 1658
+        },
+        "mySmartHome": {
+          "x": 380,
+          "y": 1658
+        },
+        "AutomaticLighting": {
+          "x": 20,
+          "y": 1854
+        },
+        "EmergencyContainment": {
+          "x": 200,
+          "y": 1854
+        },
+        "homeStates": {
+          "x": 20,
+          "y": 2009
+        },
+        "vacant": {
+          "x": 20,
+          "y": 2793
+        },
+        "occupied": {
+          "x": 380,
+          "y": 2793
+        },
+        "sleep": {
+          "x": 560,
+          "y": 2009
+        },
+        "away": {
+          "x": 740,
+          "y": 2009
+        },
+        "emergency": {
+          "x": 920,
+          "y": 2009
+        },
+        "securityStates": {
+          "x": 1100,
+          "y": 2009
+        },
+        "disarmed": {
+          "x": 920,
+          "y": 2793
+        },
+        "armed_home": {
+          "x": 1100,
+          "y": 2793
+        },
+        "armed_away": {
+          "x": 1280,
+          "y": 2793
+        },
+        "alarm": {
+          "x": 200,
+          "y": 2099
+        },
+        "lockStates": {
+          "x": 380,
+          "y": 2099
+        },
+        "locked": {
+          "x": 920,
+          "y": 2883
+        },
+        "unlocked": {
+          "x": 560,
+          "y": 2883
+        },
+        "locking": {
+          "x": 740,
+          "y": 2883
+        },
+        "unlocking": {
+          "x": 1100,
+          "y": 2883
+        },
+        "thermostatStates": {
+          "x": 1280,
+          "y": 2099
+        },
+        "off": {
+          "x": 1460,
+          "y": 2883
+        },
+        "heating": {
+          "x": 20,
+          "y": 2973
+        },
+        "cooling": {
+          "x": 200,
+          "y": 2189
+        },
+        "auto": {
+          "x": 380,
+          "y": 2189
+        },
+        "EnergyEfficiencyReq": {
+          "x": 20,
+          "y": 2344
+        },
+        "SecurityReq": {
+          "x": 200,
+          "y": 2344
+        },
+        "ComfortReq": {
+          "x": 380,
+          "y": 2344
+        },
+        "AdaptiveLightingReq": {
+          "x": 560,
+          "y": 2344
+        },
+        "EmergencyLockdownReq": {
+          "x": 740,
+          "y": 2344
+        },
+        "AutomateHome": {
+          "x": 20,
+          "y": 2584
+        },
+        "MonitorSecurity": {
+          "x": 200,
+          "y": 2584
+        },
+        "ManageEnergy": {
+          "x": 380,
+          "y": 2584
+        },
+        "any": {
+          "x": 560,
+          "y": 2793
+        },
+        "comfortRange": {
+          "x": 1460,
+          "y": 2793
+        },
+        "energyBalance": {
+          "x": 20,
+          "y": 2883
+        },
+        "brightnessRange": {
+          "x": 200,
+          "y": 2883
+        },
+        "dimmerRange": {
+          "x": 380,
+          "y": 2883
+        },
+        "HomeMode": {
+          "x": 200,
+          "y": 2973
+        },
+        "ThermostatMode": {
+          "x": 380,
+          "y": 2973
+        },
+        "home": {
+          "x": 920,
+          "y": 2973
+        },
+        "security": {
+          "x": 1280,
+          "y": 2973
+        },
+        "lighting": {
+          "x": 1100,
+          "y": 2973
+        },
+        "homeowner": {
+          "x": 1460,
+          "y": 2973
+        },
+        "smartHome": {
+          "x": 20,
+          "y": 3063
+        },
+        "securityService": {
+          "x": 200,
+          "y": 3063
+        },
+        "utilityCompany": {
+          "x": 560,
+          "y": 3063
+        }
+      }
+    }
+  }
+}

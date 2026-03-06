@@ -1,0 +1,369 @@
+{
+  "version": 1,
+  "layouts": {
+    "elk": {
+      "positions": {
+        "SpaceMission": {
+          "x": 20,
+          "y": 45
+        },
+        "spacecraft": {
+          "x": 560,
+          "y": 2292
+        },
+        "groundStation": {
+          "x": 380,
+          "y": 45
+        },
+        "missionControl": {
+          "x": 560,
+          "y": 45
+        },
+        "Spacecraft": {
+          "x": 740,
+          "y": 45
+        },
+        "propulsionSystem": {
+          "x": 920,
+          "y": 45
+        },
+        "powerSystem": {
+          "x": 1100,
+          "y": 45
+        },
+        "communicationSystem": {
+          "x": 1280,
+          "y": 45
+        },
+        "navigationSystem": {
+          "x": 1460,
+          "y": 45
+        },
+        "lifeSupportSystem": {
+          "x": 20,
+          "y": 316
+        },
+        "sciencePayload": {
+          "x": 200,
+          "y": 316
+        },
+        "PropulsionSystem": {
+          "x": 380,
+          "y": 316
+        },
+        "mainEngine": {
+          "x": 560,
+          "y": 316
+        },
+        "thrusters": {
+          "x": 740,
+          "y": 316
+        },
+        "fuelTank": {
+          "x": 920,
+          "y": 316
+        },
+        "PowerSystem": {
+          "x": 1100,
+          "y": 316
+        },
+        "solarPanels": {
+          "x": 1280,
+          "y": 316
+        },
+        "batteries": {
+          "x": 1460,
+          "y": 316
+        },
+        "powerController": {
+          "x": 20,
+          "y": 522
+        },
+        "CommSystem": {
+          "x": 200,
+          "y": 522
+        },
+        "highGainAntenna": {
+          "x": 1732.1587524414062,
+          "y": 253.55670166015625
+        },
+        "lowGainAntenna": {
+          "x": 560,
+          "y": 522
+        },
+        "transmitter": {
+          "x": 740,
+          "y": 522
+        },
+        "receiver": {
+          "x": 920,
+          "y": 522
+        },
+        "NavSystem": {
+          "x": 1100,
+          "y": 522
+        },
+        "starTracker": {
+          "x": 1280,
+          "y": 522
+        },
+        "imu": {
+          "x": 1460,
+          "y": 522
+        },
+        "gps": {
+          "x": -805.2145538330078,
+          "y": 379.41705322265625
+        },
+        "LifeSupport": {
+          "x": 200,
+          "y": 710
+        },
+        "oxygenGenerator": {
+          "x": 380,
+          "y": 710
+        },
+        "carbonDioxideRemover": {
+          "x": 560,
+          "y": 710
+        },
+        "waterRecycler": {
+          "x": 740,
+          "y": 710
+        },
+        "temperatureControl": {
+          "x": 920,
+          "y": 710
+        },
+        "SciencePackage": {
+          "x": 1100,
+          "y": 710
+        },
+        "cameras": {
+          "x": 1280,
+          "y": 710
+        },
+        "spectrometer": {
+          "x": 1460,
+          "y": 710
+        },
+        "magnetometer": {
+          "x": 20,
+          "y": 942
+        },
+        "dataStorage": {
+          "x": 200,
+          "y": 942
+        },
+        "GroundStation": {
+          "x": 380,
+          "y": 942
+        },
+        "dish": {
+          "x": 560,
+          "y": 942
+        },
+        "computers": {
+          "x": 740,
+          "y": 942
+        },
+        "displays": {
+          "x": 920,
+          "y": 942
+        },
+        "MissionControl": {
+          "x": 1100,
+          "y": 942
+        },
+        "flightDirector": {
+          "x": 380,
+          "y": 2292
+        },
+        "engineers": {
+          "x": 1460,
+          "y": 942
+        },
+        "scientists": {
+          "x": 20,
+          "y": 1117
+        },
+        "MissionTeam": {
+          "x": 200,
+          "y": 1117
+        },
+        "FlightDirector": {
+          "x": 380,
+          "y": 1117
+        },
+        "Engineer": {
+          "x": 560,
+          "y": 1117
+        },
+        "Scientist": {
+          "x": 740,
+          "y": 1117
+        },
+        "RocketEngine": {
+          "x": 920,
+          "y": 1117
+        },
+        "Thruster": {
+          "x": 1100,
+          "y": 1117
+        },
+        "FuelTank": {
+          "x": 1280,
+          "y": 1117
+        },
+        "SolarPanel": {
+          "x": 1460,
+          "y": 1117
+        },
+        "Battery": {
+          "x": 20,
+          "y": 1248
+        },
+        "PowerController": {
+          "x": 200,
+          "y": 1248
+        },
+        "Antenna": {
+          "x": 380,
+          "y": 1248
+        },
+        "Transmitter": {
+          "x": 560,
+          "y": 1248
+        },
+        "Receiver": {
+          "x": 740,
+          "y": 1248
+        },
+        "StarTracker": {
+          "x": 920,
+          "y": 1248
+        },
+        "IMU": {
+          "x": 1100,
+          "y": 1248
+        },
+        "SpaceGPS": {
+          "x": 1280,
+          "y": 1248
+        },
+        "marsMission": {
+          "x": 1460,
+          "y": 1248
+        },
+        "missionPhases": {
+          "x": 20,
+          "y": 1444
+        },
+        "preparation": {
+          "x": 20,
+          "y": 2112
+        },
+        "launch": {
+          "x": 200,
+          "y": 2112
+        },
+        "transit": {
+          "x": 380,
+          "y": 2112
+        },
+        "operations": {
+          "x": 560,
+          "y": 2112
+        },
+        "returnToEarth": {
+          "x": 740,
+          "y": 2112
+        },
+        "complete": {
+          "x": 1100,
+          "y": 1444
+        },
+        "propulsionStates": {
+          "x": 1280,
+          "y": 1444
+        },
+        "idle": {
+          "x": 1460,
+          "y": 2112
+        },
+        "firing": {
+          "x": 1280,
+          "y": 2112
+        },
+        "maneuvering": {
+          "x": 200,
+          "y": 1534
+        },
+        "commStates": {
+          "x": 380,
+          "y": 1534
+        },
+        "standby": {
+          "x": 380,
+          "y": 2202
+        },
+        "transmitting": {
+          "x": -567.4182739257812,
+          "y": 751.0403442382812
+        },
+        "receiving": {
+          "x": 920,
+          "y": 1534
+        },
+        "MissionSuccessReq": {
+          "x": 20,
+          "y": 1689
+        },
+        "CrewSafetyReq": {
+          "x": 200,
+          "y": 1689
+        },
+        "CommunicationReq": {
+          "x": 380,
+          "y": 1689
+        },
+        "ConductMission": {
+          "x": 20,
+          "y": 1916
+        },
+        "EmergencyResponse": {
+          "x": 200,
+          "y": 1916
+        },
+        "massConstraint": {
+          "x": 920,
+          "y": 2112
+        },
+        "powerBalance": {
+          "x": 20,
+          "y": 2202
+        },
+        "lifeSafetyLimits": {
+          "x": 560,
+          "y": 2202
+        },
+        "dataConstraint": {
+          "x": 740,
+          "y": 2202
+        },
+        "MissionPhase": {
+          "x": 920,
+          "y": 2202
+        },
+        "mission": {
+          "x": 200,
+          "y": 2292
+        },
+        "missionTeam": {
+          "x": 20,
+          "y": 2292
+        }
+      }
+    }
+  }
+}
