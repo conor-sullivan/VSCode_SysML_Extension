@@ -5,9 +5,17 @@ export interface ElementPosition {
     y: number;
 }
 
+/** Per-element style overrides (e.g. from the Style toolbar). Keyed by element name. */
+export interface ElementStyleOverrides {
+    borderColor?: string;
+}
+
 export interface ViewLayout {
     positions: Record<string, ElementPosition>;
     collapsed?: string[];
+    expanded?: string[];  // IBD: type parts explicitly expanded to show children when parent is collapsed
+    /** Per-element style overrides for this view */
+    elementStyles?: Record<string, ElementStyleOverrides>;
 }
 
 export interface LayoutFile {
@@ -92,13 +100,14 @@ export function saveLayout(
 }
 
 /**
- * Persist the collapsed element list for a single view type.
+ * Persist the collapsed (and optionally expanded) element list for a single view type.
  * Merges into the existing layout file, preserving positions.
  */
 export function saveCollapseState(
     documentUri: vscode.Uri,
     viewType: string,
     collapsed: string[],
+    expanded?: string[],
 ): void {
     const layoutUri = getLayoutPath(documentUri);
     const key = layoutUri.toString() + '#collapse';
@@ -118,11 +127,15 @@ export function saveCollapseState(
             };
 
             const existing = layoutFile.layouts[viewType];
-            layoutFile.layouts[viewType] = {
+            const nextLayout: ViewLayout = {
                 ...existing,
                 positions: existing?.positions ?? {},
                 collapsed: collapsed.length > 0 ? collapsed : undefined,
             };
+            if (expanded !== undefined) {
+                nextLayout.expanded = expanded.length > 0 ? expanded : undefined;
+            }
+            layoutFile.layouts[viewType] = nextLayout;
 
             const content = Buffer.from(
                 JSON.stringify(layoutFile, null, 2) + '\n',
@@ -133,6 +146,65 @@ export function saveCollapseState(
             console.warn('[SysML Layout] Failed to save collapse state:', err);
         }
     }, DEBOUNCE_MS));
+}
+
+/**
+ * Persist per-element style overrides for a single view (e.g. border color).
+ * Merges into the existing layout file; pass the full elementStyles for that view to avoid races.
+ */
+export async function saveElementStyles(
+    documentUri: vscode.Uri,
+    viewType: string,
+    elementStyles: Record<string, ElementStyleOverrides>,
+): Promise<void> {
+    const current = await loadLayout(documentUri);
+    const layoutFile: LayoutFile = current ?? {
+        version: LAYOUT_FILE_VERSION,
+        layouts: {},
+    };
+    const existing = layoutFile.layouts[viewType];
+    layoutFile.layouts[viewType] = {
+        ...existing,
+        positions: existing?.positions ?? {},
+        collapsed: existing?.collapsed,
+        expanded: existing?.expanded,
+        elementStyles: Object.keys(elementStyles).length > 0 ? elementStyles : undefined,
+    };
+    const layoutUri = getLayoutPath(documentUri);
+    const content = Buffer.from(
+        JSON.stringify(layoutFile, null, 2) + '\n',
+        'utf-8',
+    );
+    await vscode.workspace.fs.writeFile(layoutUri, content);
+}
+
+/**
+ * Clear only the saved positions for a specific view; keeps collapsed/expanded state.
+ * Use this to reset diagram layout to auto while preserving collapse state.
+ */
+export async function clearLayoutPositions(
+    documentUri: vscode.Uri,
+    viewType: string,
+): Promise<void> {
+    const current = await loadLayout(documentUri);
+    const layoutFile: LayoutFile = current ?? {
+        version: LAYOUT_FILE_VERSION,
+        layouts: {},
+    };
+    const existing = layoutFile.layouts[viewType];
+    layoutFile.layouts[viewType] = {
+        ...existing,
+        positions: {},
+        collapsed: existing?.collapsed,
+        expanded: existing?.expanded,
+        elementStyles: existing?.elementStyles,
+    };
+    const layoutUri = getLayoutPath(documentUri);
+    const content = Buffer.from(
+        JSON.stringify(layoutFile, null, 2) + '\n',
+        'utf-8',
+    );
+    await vscode.workspace.fs.writeFile(layoutUri, content);
 }
 
 /**

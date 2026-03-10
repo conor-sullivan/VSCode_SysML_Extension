@@ -3,7 +3,8 @@ import * as vscode from 'vscode';
 import { LspModelProvider, toVscodeRange } from '../providers/lspModelProvider';
 import type { SysMLElementDTO } from '../providers/sysmlModelTypes';
 import type { SysMLElement } from '../types/sysmlTypes';
-import { loadLayout, saveLayout, saveCollapseState } from '../storage/layoutStorage';
+import { loadLayout, saveLayout, saveCollapseState, clearLayoutPositions, saveElementStyles } from '../storage/layoutStorage';
+import type { ElementStyleOverrides } from '../storage/layoutStorage';
 
 export class VisualizationPanel {
     public static currentPanel: VisualizationPanel | undefined;
@@ -20,6 +21,7 @@ export class VisualizationPanel {
     private _fileUris: vscode.Uri[] = []; // All source file URIs (for folder-level visualization)
     private _extensionVersion: string = '';
     private _pendingPackageName: string | undefined; // Package to select when data arrives
+    private _pendingResetLayoutFit: boolean = false; // After reset layout, tell webview to fit to content
 
     private constructor(
         panel: vscode.WebviewPanel,
@@ -61,7 +63,7 @@ export class VisualizationPanel {
         }, 100);
 
         this._panel.webview.onDidReceiveMessage(
-            message => {
+            async (message) => {
                 switch (message.command) {
                     case 'webviewLog':
                         // Forward webview console logs to VS Code output channel
@@ -130,7 +132,38 @@ export class VisualizationPanel {
                         break;
                     case 'saveCollapseState':
                         if (message.view && Array.isArray(message.collapsed)) {
-                            saveCollapseState(this._document.uri, message.view, message.collapsed);
+                            saveCollapseState(
+                                this._document.uri,
+                                message.view,
+                                message.collapsed,
+                                Array.isArray(message.expanded) ? message.expanded : undefined
+                            );
+                        }
+                        break;
+                    case 'resetLayout':
+                        if (message.view) {
+                            await clearLayoutPositions(this._document.uri, message.view);
+                            this._pendingResetLayoutFit = true;
+                            await this.updateVisualization(true);
+                        }
+                        break;
+                    case 'saveElementStyles':
+                        if (message.view && message.elementName && message.style != null) {
+                            const current = await loadLayout(this._document.uri);
+                            const viewLayout = current?.layouts?.[message.view as string];
+                            const existing: Record<string, ElementStyleOverrides> = { ...(viewLayout?.elementStyles || {}) };
+                            const style = message.style as ElementStyleOverrides;
+                            if (Object.keys(style).length === 0) {
+                                delete existing[message.elementName as string];
+                            } else {
+                                existing[message.elementName as string] = { ...existing[message.elementName as string], ...style };
+                            }
+                            await saveElementStyles(this._document.uri, message.view as string, existing);
+                            this._panel.webview.postMessage({
+                                command: 'updateElementStyles',
+                                view: message.view,
+                                elementStyles: existing,
+                            });
                         }
                         break;
                 }
@@ -305,6 +338,10 @@ export class VisualizationPanel {
             if (this._pendingPackageName) {
                 msg.pendingPackageName = this._pendingPackageName;
                 this._pendingPackageName = undefined;
+            }
+            if (this._pendingResetLayoutFit) {
+                msg.fromResetLayout = true;
+                this._pendingResetLayoutFit = false;
             }
             this._panel.webview.postMessage(msg);
         } catch {
@@ -1583,11 +1620,20 @@ export class VisualizationPanel {
             </div>
             <span style="color: var(--vscode-panel-border);">|</span>
             <button id="fit-btn" class="action-btn" title="Fit diagram to view">⊞ Fit</button>
-            <button id="reset-btn" class="action-btn" title="Reset zoom">↻ Reset</button>
+            <button id="reset-btn" class="action-btn" title="Reset zoom and layout (restore default positions)">↻ Reset</button>
             <button id="layout-direction-btn" class="action-btn" title="Toggle layout direction">→ LR</button>
             <button id="category-headers-btn" class="action-btn active" title="Toggle category headers" style="background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-button-background);">☰ Grouped</button>
             <button id="minimap-toolbar-btn" class="action-btn" title="Toggle minimap">⊡ Map</button>
             <button id="legend-btn" class="action-btn" title="Show diagram legend">🔑 Legend</button>
+            <div class="style-dropdown" style="position: relative; display: inline-block;">
+                <button id="style-btn" class="action-btn" title="Style selected element (border color)">◇ Style</button>
+                <div id="style-menu" class="export-menu" style="min-width: 200px;">
+                    <div id="style-selection-label" style="padding: 6px 10px; font-size: 11px; color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-panel-border);">Select an element in the diagram</div>
+                    <label style="display: block; padding: 6px 10px 0; font-size: 10px; color: var(--vscode-descriptionForeground);">Border color</label>
+                    <input type="color" id="style-border-color" style="margin: 4px 10px; width: 36px; height: 22px; cursor: pointer; border: 1px solid var(--vscode-input-border); border-radius: 3px;">
+                    <button id="style-apply-btn" class="primary-btn" style="margin: 8px 10px; display: block;">Apply</button>
+                </div>
+            </div>
             <button id="ee-egg" title="What's this?">🥚</button>
             <button id="about-btn" class="action-btn" title="About this extension">ℹ️ About</button>
             <button id="activity-debug-btn" class="action-btn" title="Show Labels on Forks and Joins" style="display: none;">🏷️ Show Labels</button>
@@ -1735,9 +1781,14 @@ export class VisualizationPanel {
 
         let currentData = null;
         let currentView = 'elk';  // General View as default
+        let selectedElementName = null;  // For Style panel: last clicked diagram element name
+        let selectedElementView = null;  // View where element was selected (elk, ibd, state, etc.)
+        function setSelectedElement(view, elementName) { selectedElementView = view; selectedElementName = elementName; }
         let selectedDiagramIndex = 0; // Track currently selected diagram for multi-diagram views
         let selectedDiagramName = null; // Track selected diagram by name to preserve across updates
         const collapsedElements = new Set(); // Elements whose children are hidden in the General view
+        const collapsedIbdElements = new Set(); // Parts whose children are hidden in the IBD view
+        const expandedIbdElements = new Set(); // IBD type parts explicitly expanded to show children when parent is collapsed
         let activityDebugLabels = false; // Toggle for showing debug labels on forks/joins in Activity view
         const STRUCTURAL_VIEWS = new Set(['elk', 'hierarchy']);
         const MIN_CANVAS_ZOOM = 0.04;
@@ -3642,6 +3693,17 @@ export class VisualizationPanel {
                         savedElkCollapsed.forEach(function(name) { collapsedElements.add(name); });
                     }
 
+                    collapsedIbdElements.clear();
+                    var savedIbdCollapsed = message.savedPositions && message.savedPositions.ibd && message.savedPositions.ibd.collapsed;
+                    if (Array.isArray(savedIbdCollapsed)) {
+                        savedIbdCollapsed.forEach(function(name) { collapsedIbdElements.add(name); });
+                    }
+                    expandedIbdElements.clear();
+                    var savedIbdExpanded = message.savedPositions && message.savedPositions.ibd && message.savedPositions.ibd.expanded;
+                    if (Array.isArray(savedIbdExpanded)) {
+                        savedIbdExpanded.forEach(function(name) { expandedIbdElements.add(name); });
+                    }
+
                     // If the extension requested a specific package, apply it
                     // before anything else so updateDiagramSelector picks it up.
                     if (message.pendingPackageName) {
@@ -3682,7 +3744,15 @@ export class VisualizationPanel {
                     }
                     break;
                 case 'highlightElement':
+                    if (message.elementName) setSelectedElement(currentView, message.elementName);
                     highlightElementInVisualization(message.elementName, message.skipCentering);
+                    break;
+                case 'updateElementStyles':
+                    if (message.view && message.elementStyles != null && currentData && currentData.savedPositions) {
+                        if (!currentData.savedPositions[message.view]) currentData.savedPositions[message.view] = {};
+                        currentData.savedPositions[message.view].elementStyles = message.elementStyles;
+                        try { renderVisualization(message.view); } catch (e) { console.error(e); }
+                    }
                     break;
                 case 'requestCurrentView':
                     // Send back the current view state
@@ -6879,10 +6949,11 @@ export class VisualizationPanel {
                 }
             });
 
-            // Apply saved positions as initial coordinates before simulation
-            const savedGraphPositions = (currentData && currentData.savedPositions && currentData.savedPositions.graph)
-                ? currentData.savedPositions.graph.positions
-                : null;
+            // Apply saved positions as initial coordinates before simulation (skip when resetting to re-layout)
+            const savedGraphPositions = (window.pendingResetLayoutView === 'graph') ? null
+                : (currentData && currentData.savedPositions && currentData.savedPositions.graph)
+                    ? currentData.savedPositions.graph.positions
+                    : null;
             if (savedGraphPositions) {
                 nodes.forEach(function(n) {
                     var saved = savedGraphPositions[n.name];
@@ -6949,9 +7020,10 @@ export class VisualizationPanel {
                 const maxWidth = Math.max(nameWidth + 20, 100); // Minimum 100px
                 const nodeHeight = 50; // Reduced height
 
-                // Check library validation
+                // Check library validation; per-element style override
                 const isLibValidated = isLibraryValidated(d);
-                const borderColor = isLibValidated ? 'var(--vscode-charts-green)' : 'var(--vscode-panel-border)';
+                const graphElStyles = currentData && currentData.savedPositions && currentData.savedPositions.graph && currentData.savedPositions.graph.elementStyles;
+                const borderColor = (graphElStyles && graphElStyles[d.name] && graphElStyles[d.name].borderColor) || (isLibValidated ? 'var(--vscode-charts-green)' : 'var(--vscode-panel-border)');
                 const borderWidth = isLibValidated ? '3px' : '2px';
 
                 // Simple background card
@@ -6971,10 +7043,12 @@ export class VisualizationPanel {
                     .style('filter', 'drop-shadow(2px 2px 4px rgba(0,0,0,0.2))')
                     .on('click', (event, d) => {
                         event.stopPropagation();
+                        setSelectedElement('graph', d.name);
                         expandNodeDetails(d, nodeGroup);
                     })
                     .on('dblclick', (event, d) => {
                         event.stopPropagation();
+                        setSelectedElement('graph', d.name);
                         vscode.postMessage({
                             command: 'jumpToElement',
                             elementName: d.name
@@ -7011,6 +7085,24 @@ export class VisualizationPanel {
 
                 node.attr('transform', d => 'translate(' + d.x + ',' + d.y + ')');
             });
+
+            if (window.pendingResetLayoutView === 'graph') {
+                simulation.on('end', function() {
+                    if (window.pendingResetLayoutView !== 'graph') return;
+                    var positionsToSave = {};
+                    nodes.forEach(function(n) {
+                        positionsToSave[n.name] = { x: n.x, y: n.y };
+                    });
+                    vscode.postMessage({ command: 'savePositions', view: 'graph', positions: positionsToSave });
+                    if (currentData) {
+                        if (!currentData.savedPositions) currentData.savedPositions = {};
+                        if (!currentData.savedPositions.graph) currentData.savedPositions.graph = {};
+                        currentData.savedPositions.graph.positions = positionsToSave;
+                    }
+                    window.pendingResetLayoutView = null;
+                    setTimeout(function() { zoomToFit('auto'); }, 80);
+                });
+            }
 
             function expandNodeDetails(nodeData, nodeGroup) {
                 // Remove any existing expanded details
@@ -8144,10 +8236,23 @@ export class VisualizationPanel {
             };
         }
 
+        var VIEWS_WITH_LAYOUT_PERSISTENCE = new Set(['elk', 'ibd', 'state', 'usecase', 'graph']);
         function resetZoom() {
             if (currentView === 'sysml' && cy) {
                 cy.reset();
                 fitSysMLView(80, { preferSelection: false });
+                return;
+            }
+            if (VIEWS_WITH_LAYOUT_PERSISTENCE.has(currentView)) {
+                window.pendingResetLayoutView = currentView;
+                if (currentData && currentData.savedPositions) {
+                    if (currentData.savedPositions[currentView]) {
+                        currentData.savedPositions[currentView].positions = {};
+                    } else {
+                        currentData.savedPositions[currentView] = { positions: {} };
+                    }
+                }
+                renderVisualization(currentView);
                 return;
             }
             window.userHasManuallyZoomed = true; // Mark as manual interaction
@@ -8653,10 +8758,11 @@ export class VisualizationPanel {
                     return sections;
                 }
 
-                // Retrieve any previously saved positions for this view
-                var savedElkPositions = (currentData && currentData.savedPositions && currentData.savedPositions.elk)
-                    ? currentData.savedPositions.elk.positions
-                    : null;
+                // Retrieve any previously saved positions for this view (skip when resetting to re-layout)
+                var savedElkPositions = (window.pendingResetLayoutView === 'elk') ? null
+                    : (currentData && currentData.savedPositions && currentData.savedPositions.elk)
+                        ? currentData.savedPositions.elk.positions
+                        : null;
 
                 // Calculate positions with proper grid layout (no overlapping)
                 var nodePositions = new Map();
@@ -8809,6 +8915,7 @@ export class VisualizationPanel {
                 // Draw nodes
                 var nodeGroup = g.append('g').attr('class', 'general-nodes');
 
+                var elkElStyles = currentData && currentData.savedPositions && currentData.savedPositions.elk && currentData.savedPositions.elk.elementStyles;
                 nodePositions.forEach(function(pos, name) {
                     var el = pos.element;
                     var typeLower = (el.type || '').toLowerCase();
@@ -8830,8 +8937,8 @@ export class VisualizationPanel {
                         .attr('data-element-name', name)
                         .style('cursor', 'pointer');
 
-                    // Background - definitions have dashed border, usages have solid bold border
-                    var _nodeStroke = isLibValidated ? '#4EC9B0' : typeColor;
+                    // Background - definitions have dashed border, usages have solid bold border; per-element style override
+                    var _nodeStroke = (elkElStyles && elkElStyles[name] && elkElStyles[name].borderColor) || (isLibValidated ? '#4EC9B0' : typeColor);
                     var _nodeStrokeW = isUsage ? '3px' : '2px';
                     nodeG.append('rect')
                         .attr('class', 'node-background')
@@ -9061,7 +9168,7 @@ export class VisualizationPanel {
                         clickedNode.select('.node-background')
                             .style('stroke', '#FFD700')
                             .style('stroke-width', '3px');
-                        // Navigate to element in source file
+                        setSelectedElement('elk', name);
                         vscode.postMessage({ command: 'jumpToElement', elementName: name, skipCentering: true });
                     }).on('dblclick', function(event) {
                         event.stopPropagation();
@@ -9079,7 +9186,9 @@ export class VisualizationPanel {
                                 event.clientY,
                                 name,
                                 true,
-                                collapsedElements.has(name)
+                                collapsedElements.has(name),
+                                'elk',
+                                collapsedElements
                             );
                         });
                     }
@@ -9739,6 +9848,21 @@ export class VisualizationPanel {
 
                 // Initial edge drawing
                 drawGeneralEdges();
+
+                if (window.pendingResetLayoutView === 'elk') {
+                    var positionsToSave = {};
+                    nodePositions.forEach(function(p, elName) {
+                        if (p && (p.x != null && p.y != null)) positionsToSave[elName] = { x: p.x, y: p.y };
+                    });
+                    vscode.postMessage({ command: 'savePositions', view: 'elk', positions: positionsToSave });
+                    if (currentData) {
+                        if (!currentData.savedPositions) currentData.savedPositions = {};
+                        if (!currentData.savedPositions.elk) currentData.savedPositions.elk = {};
+                        currentData.savedPositions.elk.positions = positionsToSave;
+                    }
+                    window.pendingResetLayoutView = null;
+                    setTimeout(function() { zoomToFit('auto'); }, 80);
+                }
 
             } catch (error) {
                 console.error('[General] Error:', error);
@@ -10502,9 +10626,115 @@ export class VisualizationPanel {
                 return;
             }
 
-            const parts = data.parts || [];
-            const ports = data.ports || [];
-            const connectors = data.connectors || [];
+            const allIbdParts = data.parts || [];
+            const allIbdPorts = data.ports || [];
+            const allIbdConnectors = data.connectors || [];
+
+            // Recursively hide children of collapsed parts
+            var hiddenIbdParts = new Set();
+            function markHiddenIbdChildren(parentName) {
+                // Match via containerId linkage
+                allIbdParts.forEach(function(p) {
+                    if (p.containerId === parentName && !hiddenIbdParts.has(p.name)) {
+                        hiddenIbdParts.add(p.name);
+                        markHiddenIbdChildren(p.name);
+                    }
+                });
+                // Also match via part.children array for parts whose children
+                // are in the flat list but linked by name rather than containerId
+                var parentPart = allIbdParts.find(function(p) { return p.name === parentName; });
+                if (parentPart && parentPart.children) {
+                    parentPart.children.forEach(function(child) {
+                        if (!child || !child.name) return;
+                        if (child.type && child.type.toLowerCase().includes('part') && !child.type.toLowerCase().includes('def')) {
+                            if (!hiddenIbdParts.has(child.name)) {
+                                hiddenIbdParts.add(child.name);
+                                markHiddenIbdChildren(child.name);
+                            }
+                        }
+                    });
+                }
+            }
+            collapsedIbdElements.forEach(function(name) {
+                markHiddenIbdChildren(name);
+            });
+
+            // Helper: get the type name of a part (for usage -> type relationship)
+            function getPartTypeName(part) {
+                if (!part) return null;
+                var t = null;
+                if (part.attributes) {
+                    if (typeof part.attributes.get === 'function') {
+                        t = part.attributes.get('partType') || part.attributes.get('type') || part.attributes.get('typedBy');
+                    } else if (typeof part.attributes === 'object') {
+                        t = part.attributes.partType || part.attributes.type || part.attributes.typedBy;
+                    }
+                }
+                if (!t && part.partType) t = part.partType;
+                if (!t && part.typing) t = typeof part.typing === 'string' ? part.typing.replace(/^:\\s*/, '').trim() : null;
+                return t ? String(t).trim() : null;
+            }
+
+            // Normalize type name for matching (qualified names like "Pkg::Engine" -> use both full and "Engine")
+            function typeNameMatchesPart(typeName, part) {
+                if (!typeName || !part || !part.name) return false;
+                if (part.name === typeName) return true;
+                if (part.qualifiedName && part.qualifiedName === typeName) return true;
+                var lastSegment = typeName.split(/[::.]/).pop();
+                return part.name === lastSegment;
+            }
+
+            // Find the diagram part that represents this type (part def or usage with that name)
+            function findPartByTypeName(typeName) {
+                return allIbdParts.find(function(q) { return typeNameMatchesPart(typeName, q); });
+            }
+
+            // Recursively add all descendants of an expanded type to visibleUnderExpandedType.
+            // This mirrors markHiddenIbdChildren so that "expand type" reveals the same tree that "collapse parent" hid.
+            var visibleUnderExpandedType = new Set();
+            function markVisibleUnderExpandedType(parentName) {
+                allIbdParts.forEach(function(p) {
+                    if (p.containerId === parentName && !visibleUnderExpandedType.has(p.name)) {
+                        visibleUnderExpandedType.add(p.name);
+                        markVisibleUnderExpandedType(p.name);
+                    }
+                });
+                var parentPart = allIbdParts.find(function(p) { return p.name === parentName; });
+                if (parentPart && parentPart.children) {
+                    parentPart.children.forEach(function(child) {
+                        if (!child || !child.name) return;
+                        if (child.type && child.type.toLowerCase().includes('part') && !child.type.toLowerCase().includes('def')) {
+                            if (!visibleUnderExpandedType.has(child.name)) {
+                                visibleUnderExpandedType.add(child.name);
+                                markVisibleUnderExpandedType(child.name);
+                            }
+                        }
+                    });
+                }
+            }
+            expandedIbdElements.forEach(function(name) {
+                markVisibleUnderExpandedType(name);
+            });
+
+            const parts = allIbdParts.filter(function(p) {
+                return !hiddenIbdParts.has(p.name) || visibleUnderExpandedType.has(p.name);
+            });
+            var visibleIbdPartNames = new Set(parts.map(function(p) { return p.name; }));
+
+            function isPartVisibleForPort(parentId) {
+                if (!parentId) return true;
+                if (!hiddenIbdParts.has(parentId) || visibleUnderExpandedType.has(parentId)) return true;
+                var parentPart = allIbdParts.find(function(q) { return q.name === parentId || q.id === parentId; });
+                return parentPart && (!hiddenIbdParts.has(parentPart.name) || visibleUnderExpandedType.has(parentPart.name));
+            }
+            const ports = allIbdPorts.filter(function(p) {
+                return isPartVisibleForPort(p.parentId);
+            });
+            const connectors = allIbdConnectors.filter(function(c) {
+                var srcOk = !hiddenIbdParts.has(c.sourceId) || visibleUnderExpandedType.has(c.sourceId);
+                var tgtOk = !hiddenIbdParts.has(c.targetId) || visibleUnderExpandedType.has(c.targetId);
+                return srcOk && tgtOk;
+            });
 
             // Layout configuration - expanded spacing for ports and connectors
             const isHorizontal = layoutDirection === 'horizontal';
@@ -10608,10 +10838,11 @@ export class VisualizationPanel {
                 rowHeights.push(maxHeight);
             }
 
-            // Retrieve any previously saved positions for this view
-            const savedIbdPositions = (currentData && currentData.savedPositions && currentData.savedPositions.ibd)
-                ? currentData.savedPositions.ibd.positions
-                : null;
+            // Retrieve any previously saved positions for this view (skip when resetting to re-layout)
+            const savedIbdPositions = (window.pendingResetLayoutView === 'ibd') ? null
+                : (currentData && currentData.savedPositions && currentData.savedPositions.ibd)
+                    ? currentData.savedPositions.ibd.positions
+                    : null;
 
             // Position parts in grid with variable row heights
             // Stagger alternate columns vertically to make connector routing clearer
@@ -11367,8 +11598,9 @@ export class VisualizationPanel {
                     .attr('data-element-name', part.name)
                     .style('cursor', 'pointer');
 
-                // Part box (main rectangle) - matching General View
-                var _ibdStroke = isLibValidated ? '#4EC9B0' : typeColor;
+                // Part box (main rectangle) - matching General View; per-element style override
+                var ibdElStyles = currentData && currentData.savedPositions && currentData.savedPositions.ibd && currentData.savedPositions.ibd.elementStyles;
+                var _ibdStroke = (ibdElStyles && ibdElStyles[part.name] && ibdElStyles[part.name].borderColor) || (isLibValidated ? '#4EC9B0' : typeColor);
                 var _ibdStrokeW = isUsage ? '3px' : '2px';
                 partG.append('rect')
                     .attr('width', partWidth)
@@ -11423,6 +11655,39 @@ export class VisualizationPanel {
                     .style('font-size', '11px')
                     .style('font-weight', 'bold')
                     .style('fill', 'var(--vscode-editor-foreground)');
+
+                // Check for children: either via containerId linkage in the flat parts list,
+                // or via the part's own children array having nested part usages
+                var ibdPartHasChildren = allIbdParts.some(function(p) {
+                        return p.containerId === part.name || p.containerId === part.id;
+                    })
+                    || (part.children && part.children.some(function(c) {
+                        if (!c || !c.type) return false;
+                        var ct = c.type.toLowerCase();
+                        return ct.includes('part') && !ct.includes('def');
+                    }));
+                var ibdChildrenVisible = parts.some(function(p) { return p.containerId === part.name; })
+                    || (part.children && part.children.some(function(c) { return c && c.name && visibleIbdPartNames.has(c.name); }));
+                if (!ibdChildrenVisible && ibdPartHasChildren) {
+                    partG.append('text')
+                        .attr('x', partWidth - 14)
+                        .attr('y', 30)
+                        .attr('text-anchor', 'middle')
+                        .text('▶')
+                        .style('font-size', '10px')
+                        .style('fill', 'var(--vscode-descriptionForeground)')
+                        .style('cursor', 'pointer')
+                        .attr('title', 'Children collapsed - right-click to expand');
+                } else if (ibdPartHasChildren) {
+                    partG.append('text')
+                        .attr('x', partWidth - 14)
+                        .attr('y', 30)
+                        .attr('text-anchor', 'middle')
+                        .text('▼')
+                        .style('font-size', '10px')
+                        .style('fill', 'var(--vscode-descriptionForeground)')
+                        .style('opacity', '0.5');
+                }
 
                 // Show typed-by reference below name if available
                 if (typedByName) {
@@ -11577,11 +11842,31 @@ export class VisualizationPanel {
                     clickedPart.select('rect')
                         .style('stroke', '#FFD700')
                         .style('stroke-width', '3px');
+                    setSelectedElement('ibd', part.name);
                     vscode.postMessage({ command: 'jumpToElement', elementName: part.name, skipCentering: true });
                 })
                 .on('dblclick', function(event) {
                     event.stopPropagation();
                     startInlineEdit(d3.select(this), part.name, pos.x, pos.y, partWidth);
+                });
+
+                // Right-click context menu for collapse/expand
+                partG.on('contextmenu', function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (ibdPartHasChildren) {
+                        var hasVisibleChildren = parts.some(function(p) { return p.containerId === part.name; })
+                            || (part.children && part.children.some(function(c) { return c && c.name && visibleIbdPartNames.has(c.name); }));
+                        showNodeContextMenu(
+                            event.clientX,
+                            event.clientY,
+                            part.name,
+                            true,
+                            !hasVisibleChildren,
+                            'ibd',
+                            collapsedIbdElements
+                        );
+                    }
                 });
 
                 // Add drag behavior for interactive node positioning
@@ -11612,9 +11897,32 @@ export class VisualizationPanel {
                             view: 'ibd',
                             positions: positionsToSave
                         });
+
+                        // Sync in-memory cache so collapse/expand re-renders preserve dragged positions
+                        if (currentData) {
+                            if (!currentData.savedPositions) currentData.savedPositions = {};
+                            if (!currentData.savedPositions.ibd) currentData.savedPositions.ibd = {};
+                            currentData.savedPositions.ibd.positions = positionsToSave;
+                        }
                     });
                 partG.call(ibdDrag);
             });
+
+            if (window.pendingResetLayoutView === 'ibd') {
+                var positionsToSave = {};
+                partPositions.forEach(function(p, partName) {
+                    if (partName !== p.part.name) return;
+                    positionsToSave[partName] = { x: p.x, y: p.y };
+                });
+                vscode.postMessage({ command: 'savePositions', view: 'ibd', positions: positionsToSave });
+                if (currentData) {
+                    if (!currentData.savedPositions) currentData.savedPositions = {};
+                    if (!currentData.savedPositions.ibd) currentData.savedPositions.ibd = {};
+                    currentData.savedPositions.ibd.positions = positionsToSave;
+                }
+                window.pendingResetLayoutView = null;
+                setTimeout(function() { zoomToFit('auto'); }, 80);
+            }
         }
 
         // Activity/Action Flow View Renderer
@@ -12559,10 +12867,11 @@ export class VisualizationPanel {
                 statesByLevel.get(level).push(s);
             });
 
-            // Retrieve any previously saved positions for this view
-            const savedStatePositions = (currentData && currentData.savedPositions && currentData.savedPositions.state)
-                ? currentData.savedPositions.state.positions
-                : null;
+            // Retrieve any previously saved positions for this view (skip when resetting to re-layout)
+            const savedStatePositions = (window.pendingResetLayoutView === 'state') ? null
+                : (currentData && currentData.savedPositions && currentData.savedPositions.state)
+                    ? currentData.savedPositions.state.positions
+                    : null;
 
             // Position states based on layout orientation
             const statePositions = new Map();
@@ -12935,7 +13244,9 @@ export class VisualizationPanel {
                         .style('fill', 'var(--vscode-editor-foreground)');
 
                 } else {
-                    // Regular state: rounded rectangle with gradient
+                    // Regular state: rounded rectangle with gradient; per-element style override
+                    const stateElStyles = currentData && currentData.savedPositions && currentData.savedPositions.state && currentData.savedPositions.state.elementStyles;
+                    const stateStroke = (stateElStyles && stateElStyles[state.name] && stateElStyles[state.name].borderColor) || 'var(--vscode-charts-blue)';
                     const gradient = defs.append('linearGradient')
                         .attr('id', 'state-gradient-' + stateKey.replace(/[^a-zA-Z0-9]/g, '_'))
                         .attr('x1', '0%').attr('y1', '0%')
@@ -12953,7 +13264,7 @@ export class VisualizationPanel {
                         .attr('rx', 8)
                         .attr('ry', 8)
                         .style('fill', 'url(#state-gradient-' + stateKey.replace(/[^a-zA-Z0-9]/g, '_') + ')')
-                        .style('stroke', 'var(--vscode-charts-blue)')
+                        .style('stroke', stateStroke)
                         .style('stroke-width', '2px')
                         .style('filter', 'drop-shadow(2px 2px 3px rgba(0,0,0,0.2))');
 
@@ -12978,6 +13289,7 @@ export class VisualizationPanel {
                     stateElement.style('cursor', 'pointer');
                     stateElement.on('click', function(event) {
                         event.stopPropagation();
+                        setSelectedElement('state', state.name);
                         vscode.postMessage({
                             command: 'jumpToElement',
                             elementName: state.name
@@ -12989,6 +13301,21 @@ export class VisualizationPanel {
                     });
                 }
             });
+
+            if (window.pendingResetLayoutView === 'state') {
+                var positionsToSave = {};
+                statePositions.forEach(function(p, key) {
+                    positionsToSave[key] = { x: p.x, y: p.y };
+                });
+                vscode.postMessage({ command: 'savePositions', view: 'state', positions: positionsToSave });
+                if (currentData) {
+                    if (!currentData.savedPositions) currentData.savedPositions = {};
+                    if (!currentData.savedPositions.state) currentData.savedPositions.state = {};
+                    currentData.savedPositions.state.positions = positionsToSave;
+                }
+                window.pendingResetLayoutView = null;
+                setTimeout(function() { zoomToFit('auto'); }, 80);
+            }
         }
 
         // Use Case View Renderer
@@ -13024,10 +13351,11 @@ export class VisualizationPanel {
             const actionPositions = new Map();
             const requirementPositions = new Map();
 
-            // Retrieve any previously saved positions for this view
-            const savedUsecasePositions = (currentData && currentData.savedPositions && currentData.savedPositions.usecase)
-                ? currentData.savedPositions.usecase.positions
-                : null;
+            // Retrieve any previously saved positions for this view (skip when resetting to re-layout)
+            const savedUsecasePositions = (window.pendingResetLayoutView === 'usecase') ? null
+                : (currentData && currentData.savedPositions && currentData.savedPositions.usecase)
+                    ? currentData.savedPositions.usecase.positions
+                    : null;
 
             if (usecaseLayoutOrientation === 'force') {
                 // Force-directed layout
@@ -13525,19 +13853,22 @@ export class VisualizationPanel {
 
                 useCaseElement.call(useCaseDrag);
 
-                // Use case oval
+                // Use case oval; per-element style override
+                const usecaseElStyles = currentData && currentData.savedPositions && currentData.savedPositions.usecase && currentData.savedPositions.usecase.elementStyles;
+                const usecaseStroke = (usecaseElStyles && usecaseElStyles[useCase.name] && usecaseElStyles[useCase.name].borderColor) || 'var(--vscode-charts-purple)';
                 useCaseElement.append('ellipse')
                     .attr('cx', useCaseWidth / 2)
                     .attr('cy', useCaseHeight / 2)
                     .attr('rx', useCaseWidth / 2)
                     .attr('ry', useCaseHeight / 2)
                     .style('fill', 'var(--vscode-editor-background)')
-                    .style('stroke', 'var(--vscode-charts-purple)')
+                    .style('stroke', usecaseStroke)
                     .style('stroke-width', '2px');
 
                 // Click handlers: single-click navigate, double-click edit
                 useCaseElement.on('click', function(event) {
                     event.stopPropagation();
+                    setSelectedElement('usecase', useCase.name);
                     vscode.postMessage({
                         command: 'jumpToElement',
                         elementName: useCase.name
@@ -13873,6 +14204,22 @@ export class VisualizationPanel {
                         .style('fill', 'var(--vscode-editor-foreground)')
                         .style('user-select', 'none');
                 });
+            }
+
+            if (window.pendingResetLayoutView === 'usecase') {
+                saveUsecasePositions();
+                if (currentData) {
+                    var positionsToSave = {};
+                    actorPositions.forEach(function(p, key) { positionsToSave['actor:' + key] = { x: p.x, y: p.y }; });
+                    useCasePositions.forEach(function(p, key) { positionsToSave['usecase:' + key] = { x: p.x, y: p.y }; });
+                    requirementPositions.forEach(function(p, key) { positionsToSave['req:' + key] = { x: p.x, y: p.y }; });
+                    actionPositions.forEach(function(p, key) { positionsToSave['action:' + key] = { x: p.x, y: p.y }; });
+                    if (!currentData.savedPositions) currentData.savedPositions = {};
+                    if (!currentData.savedPositions.usecase) currentData.savedPositions.usecase = {};
+                    currentData.savedPositions.usecase.positions = positionsToSave;
+                }
+                window.pendingResetLayoutView = null;
+                setTimeout(function() { zoomToFit('auto'); }, 80);
             }
         }
 
@@ -14353,6 +14700,11 @@ export class VisualizationPanel {
                 !viewDropdownMenu.contains(e.target)) {
                 viewDropdownMenu.classList.remove('show');
             }
+            const styleBtn = document.getElementById('style-btn');
+            const styleMenu = document.getElementById('style-menu');
+            if (styleBtn && styleMenu && !styleBtn.contains(e.target) && !styleMenu.contains(e.target)) {
+                styleMenu.classList.remove('show');
+            }
             // Close pkg dropdown
             const pkgBtn = document.getElementById('pkg-dropdown-btn');
             const pkgMenu = document.getElementById('pkg-dropdown-menu');
@@ -14360,6 +14712,48 @@ export class VisualizationPanel {
                 pkgMenu.classList.remove('show');
             }
         });
+
+        // Style menu: toggle and update selection label / color from saved styles
+        (function initStyleMenu() {
+            const styleBtn = document.getElementById('style-btn');
+            const styleMenu = document.getElementById('style-menu');
+            const styleSelectionLabel = document.getElementById('style-selection-label');
+            const styleBorderColor = document.getElementById('style-border-color');
+            const styleApplyBtn = document.getElementById('style-apply-btn');
+            if (!styleBtn || !styleMenu || !styleSelectionLabel || !styleBorderColor || !styleApplyBtn) return;
+
+            styleBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                const isVisible = styleMenu.classList.contains('show');
+                if (!isVisible) {
+                    const btnRect = styleBtn.getBoundingClientRect();
+                    styleMenu.style.left = (btnRect.right - 200) + 'px';
+                    styleMenu.style.top = (btnRect.bottom + 4) + 'px';
+                    if (selectedElementName && selectedElementView) {
+                        styleSelectionLabel.textContent = selectedElementView + ': ' + selectedElementName;
+                        const elStyles = currentData && currentData.savedPositions && currentData.savedPositions[selectedElementView] && currentData.savedPositions[selectedElementView].elementStyles;
+                        const bc = elStyles && elStyles[selectedElementName] && elStyles[selectedElementName].borderColor;
+                        styleBorderColor.value = bc && /^#[0-9A-Fa-f]{6}$/.test(bc) ? bc : '#569CD6';
+                    } else {
+                        styleSelectionLabel.textContent = 'Select an element in the diagram';
+                        styleBorderColor.value = '#569CD6';
+                    }
+                }
+                styleMenu.classList.toggle('show', !isVisible);
+            });
+
+            styleApplyBtn.addEventListener('click', function() {
+                if (!selectedElementName || !selectedElementView) return;
+                const borderColor = styleBorderColor.value;
+                vscode.postMessage({
+                    command: 'saveElementStyles',
+                    view: selectedElementView,
+                    elementName: selectedElementName,
+                    style: { borderColor: borderColor }
+                });
+                styleMenu.classList.remove('show');
+            });
+        })();
 
         // Handle export menu item clicks
         document.querySelectorAll('.export-menu-item').forEach(item => {
@@ -14432,7 +14826,7 @@ export class VisualizationPanel {
         // Context menu for collapse/expand
         const nodeContextMenu = document.getElementById('node-context-menu');
 
-        function showNodeContextMenu(x, y, elementName, hasChildren, isCollapsed) {
+        function showNodeContextMenu(x, y, elementName, hasChildren, isCollapsed, viewKey, collapsedSet) {
             if (!nodeContextMenu) return;
             nodeContextMenu.innerHTML = '';
 
@@ -14444,24 +14838,25 @@ export class VisualizationPanel {
                     e.stopPropagation();
                     hideNodeContextMenu();
                     if (isCollapsed) {
-                        collapsedElements.delete(elementName);
+                        collapsedSet.delete(elementName);
+                        if (viewKey === 'ibd') expandedIbdElements.add(elementName);
                     } else {
-                        collapsedElements.add(elementName);
+                        collapsedSet.add(elementName);
+                        if (viewKey === 'ibd') expandedIbdElements.delete(elementName);
                     }
-                    var collapsedArray = Array.from(collapsedElements);
-                    vscode.postMessage({
-                        command: 'saveCollapseState',
-                        view: 'elk',
-                        collapsed: collapsedArray
-                    });
+                    var collapsedArray = Array.from(collapsedSet);
+                    var msg = { command: 'saveCollapseState', view: viewKey, collapsed: collapsedArray };
+                    if (viewKey === 'ibd') msg.expanded = Array.from(expandedIbdElements);
+                    vscode.postMessage(msg);
 
                     // Sync in-memory cache so re-render uses latest state
                     if (currentData) {
                         if (!currentData.savedPositions) currentData.savedPositions = {};
-                        if (!currentData.savedPositions.elk) currentData.savedPositions.elk = {};
-                        currentData.savedPositions.elk.collapsed = collapsedArray;
+                        if (!currentData.savedPositions[viewKey]) currentData.savedPositions[viewKey] = {};
+                        currentData.savedPositions[viewKey].collapsed = collapsedArray;
+                        if (viewKey === 'ibd') currentData.savedPositions[viewKey].expanded = Array.from(expandedIbdElements);
                     }
-                    renderVisualization('elk');
+                    renderVisualization(viewKey);
                 });
                 nodeContextMenu.appendChild(item);
             }
