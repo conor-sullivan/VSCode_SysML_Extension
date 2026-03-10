@@ -7,6 +7,7 @@ export interface ElementPosition {
 
 export interface ViewLayout {
     positions: Record<string, ElementPosition>;
+    collapsed?: string[];
 }
 
 export interface LayoutFile {
@@ -73,7 +74,11 @@ export function saveLayout(
                 layouts: {},
             };
 
-            layoutFile.layouts[viewType] = { positions };
+            const existing = layoutFile.layouts[viewType];
+            layoutFile.layouts[viewType] = {
+                ...existing,
+                positions,
+            };
 
             const content = Buffer.from(
                 JSON.stringify(layoutFile, null, 2) + '\n',
@@ -82,6 +87,50 @@ export function saveLayout(
             await vscode.workspace.fs.writeFile(layoutUri, content);
         } catch (err) {
             console.warn('[SysML Layout] Failed to save layout:', err);
+        }
+    }, DEBOUNCE_MS));
+}
+
+/**
+ * Persist the collapsed element list for a single view type.
+ * Merges into the existing layout file, preserving positions.
+ */
+export function saveCollapseState(
+    documentUri: vscode.Uri,
+    viewType: string,
+    collapsed: string[],
+): void {
+    const layoutUri = getLayoutPath(documentUri);
+    const key = layoutUri.toString() + '#collapse';
+
+    const prev = pendingWrites.get(key);
+    if (prev) {
+        clearTimeout(prev);
+    }
+
+    pendingWrites.set(key, setTimeout(async () => {
+        pendingWrites.delete(key);
+        try {
+            const current = await loadLayout(documentUri);
+            const layoutFile: LayoutFile = current ?? {
+                version: LAYOUT_FILE_VERSION,
+                layouts: {},
+            };
+
+            const existing = layoutFile.layouts[viewType];
+            layoutFile.layouts[viewType] = {
+                ...existing,
+                positions: existing?.positions ?? {},
+                collapsed: collapsed.length > 0 ? collapsed : undefined,
+            };
+
+            const content = Buffer.from(
+                JSON.stringify(layoutFile, null, 2) + '\n',
+                'utf-8',
+            );
+            await vscode.workspace.fs.writeFile(layoutUri, content);
+        } catch (err) {
+            console.warn('[SysML Layout] Failed to save collapse state:', err);
         }
     }, DEBOUNCE_MS));
 }

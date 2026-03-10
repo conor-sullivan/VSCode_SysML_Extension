@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { LspModelProvider, toVscodeRange } from '../providers/lspModelProvider';
 import type { SysMLElementDTO } from '../providers/sysmlModelTypes';
 import type { SysMLElement } from '../types/sysmlTypes';
-import { loadLayout, saveLayout } from '../storage/layoutStorage';
+import { loadLayout, saveLayout, saveCollapseState } from '../storage/layoutStorage';
 
 export class VisualizationPanel {
     public static currentPanel: VisualizationPanel | undefined;
@@ -126,6 +126,11 @@ export class VisualizationPanel {
                     case 'savePositions':
                         if (message.view && message.positions) {
                             saveLayout(this._document.uri, message.view, message.positions);
+                        }
+                        break;
+                    case 'saveCollapseState':
+                        if (message.view && Array.isArray(message.collapsed)) {
+                            saveCollapseState(this._document.uri, message.view, message.collapsed);
                         }
                         break;
                 }
@@ -1519,9 +1524,41 @@ export class VisualizationPanel {
         #ee-egg.hatch {
             animation: ee-wobble 0.5s ease;
         }
+
+        #node-context-menu {
+            display: none;
+            position: fixed;
+            z-index: 10000;
+            min-width: 180px;
+            background: var(--vscode-menu-background, var(--vscode-editor-background));
+            border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border));
+            border-radius: 4px;
+            padding: 4px 0;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            font-size: 12px;
+            color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+        }
+        #node-context-menu .ctx-item {
+            padding: 6px 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            user-select: none;
+        }
+        #node-context-menu .ctx-item:hover {
+            background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+            color: var(--vscode-menu-selectionForeground, var(--vscode-editor-foreground));
+        }
+        #node-context-menu .ctx-separator {
+            height: 1px;
+            background: var(--vscode-menu-separatorBackground, var(--vscode-panel-border));
+            margin: 4px 0;
+        }
     </style>
 </head>
 <body>
+    <div id="node-context-menu"></div>
     <div id="controls">
         <div style="display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; padding: 2px 0;">
             <div class="view-dropdown">
@@ -1700,6 +1737,7 @@ export class VisualizationPanel {
         let currentView = 'elk';  // General View as default
         let selectedDiagramIndex = 0; // Track currently selected diagram for multi-diagram views
         let selectedDiagramName = null; // Track selected diagram by name to preserve across updates
+        const collapsedElements = new Set(); // Elements whose children are hidden in the General view
         let activityDebugLabels = false; // Toggle for showing debug labels on forks/joins in Activity view
         const STRUCTURAL_VIEWS = new Set(['elk', 'hierarchy']);
         const MIN_CANVAS_ZOOM = 0.04;
@@ -3596,6 +3634,13 @@ export class VisualizationPanel {
 
                     currentData = message;
                     filteredData = null; // Reset filter when new data arrives
+
+                    // Restore collapsed element state from saved layout
+                    collapsedElements.clear();
+                    var savedElkCollapsed = message.savedPositions && message.savedPositions.elk && message.savedPositions.elk.collapsed;
+                    if (Array.isArray(savedElkCollapsed)) {
+                        savedElkCollapsed.forEach(function(name) { collapsedElements.add(name); });
+                    }
 
                     // If the extension requested a specific package, apply it
                     // before anything else so updateDiagramSelector picks it up.
@@ -6834,6 +6879,20 @@ export class VisualizationPanel {
                 }
             });
 
+            // Apply saved positions as initial coordinates before simulation
+            const savedGraphPositions = (currentData && currentData.savedPositions && currentData.savedPositions.graph)
+                ? currentData.savedPositions.graph.positions
+                : null;
+            if (savedGraphPositions) {
+                nodes.forEach(function(n) {
+                    var saved = savedGraphPositions[n.name];
+                    if (saved) {
+                        n.x = saved.x;
+                        n.y = saved.y;
+                    }
+                });
+            }
+
             // Enhanced force simulation with better spacing and positioning
             const simulation = d3.forceSimulation(nodes)
                 .force('link', d3.forceLink(links).id(d => d.name).distance(250))  // Increased from 120
@@ -7282,6 +7341,16 @@ export class VisualizationPanel {
                 if (!event.active) simulation.alphaTarget(0);
                 event.subject.fx = null;
                 event.subject.fy = null;
+
+                var positionsToSave = {};
+                nodes.forEach(function(n) {
+                    positionsToSave[n.name] = { x: n.x, y: n.y };
+                });
+                vscode.postMessage({
+                    command: 'savePositions',
+                    view: 'graph',
+                    positions: positionsToSave
+                });
             }
         }
 
@@ -8220,7 +8289,9 @@ export class VisualizationPanel {
                     });
                 }
 
-                function findTopLevelElements(elements, depth) {
+                var hiddenByCollapse = new Set();
+
+                function findTopLevelElements(elements, depth, parentName) {
                     if (!elements || !Array.isArray(elements)) return;
                     elements.forEach(function(el) {
                         if (!el || !el.name) return;
@@ -8228,7 +8299,7 @@ export class VisualizationPanel {
 
                         // Skip packages - look at their children
                         if (PACKAGE_TYPES.has(typeLower) || typeLower.includes('package')) {
-                            if (el.children) findTopLevelElements(el.children, depth);
+                            if (el.children) findTopLevelElements(el.children, depth, parentName);
                             return;
                         }
 
@@ -8240,11 +8311,20 @@ export class VisualizationPanel {
                             return;
                         }
 
+                        // If parent is collapsed, hide this element (but still register it in elementMap for edge filtering)
+                        if (parentName && collapsedElements.has(parentName)) {
+                            hiddenByCollapse.add(el.name);
+                            elementMap.set(el.name, el);
+                            // Still recurse so grandchildren are also hidden
+                            if (el.children) findTopLevelElements(el.children, depth + 1, el.name);
+                            return;
+                        }
+
                         // Apply category filter for top-level display
                         var category = getCategoryForType(typeLower);
                         if (!expandedGeneralCategories.has(category)) {
                             // Even if category not expanded, still recurse into children to find nested elements
-                            if (el.children) findTopLevelElements(el.children, depth + 1);
+                            if (el.children) findTopLevelElements(el.children, depth + 1, parentName);
                             return;
                         }
 
@@ -8259,7 +8339,7 @@ export class VisualizationPanel {
                         }
 
                         // Recursively find nested elements (parts within parts)
-                        if (el.children) findTopLevelElements(el.children, depth + 1);
+                        if (el.children) findTopLevelElements(el.children, depth + 1, el.name);
                     });
                 }
 
@@ -8371,7 +8451,7 @@ export class VisualizationPanel {
                 renderGeneralChips(typeStats);
                 // First collect all attributes/ports that are children of other elements
                 collectChildAttributesAndPorts(elementsData);
-                findTopLevelElements(elementsData, 0);
+                findTopLevelElements(elementsData, 0, null);
                 collectPartToDefLinks(elementsData, null);
 
                 if (topLevelElements.length === 0) {
@@ -8820,6 +8900,28 @@ export class VisualizationPanel {
                         .style('font-weight', 'bold')
                         .style('fill', 'var(--vscode-editor-foreground)');
 
+                    // Collapse indicator for elements with hidden children
+                    if (collapsedElements.has(name) && hasExpandableChildren) {
+                        nodeG.append('text')
+                            .attr('x', pos.width - 14)
+                            .attr('y', 30)
+                            .attr('text-anchor', 'middle')
+                            .text('▶')
+                            .style('font-size', '10px')
+                            .style('fill', 'var(--vscode-descriptionForeground)')
+                            .style('cursor', 'pointer')
+                            .attr('title', 'Children collapsed - right-click to expand');
+                    } else if (hasExpandableChildren) {
+                        nodeG.append('text')
+                            .attr('x', pos.width - 14)
+                            .attr('y', 30)
+                            .attr('text-anchor', 'middle')
+                            .text('▼')
+                            .style('font-size', '10px')
+                            .style('fill', 'var(--vscode-descriptionForeground)')
+                            .style('opacity', '0.5');
+                    }
+
                     // Show typed-by reference below name for usages (e.g., ": Vehicle")
                     if (typedByName) {
                         nodeG.append('text')
@@ -8934,6 +9036,20 @@ export class VisualizationPanel {
                         yOffset += sectionGap;
                     });
 
+                    // Check if this element has children that would be separate top-level nodes
+                    var hasExpandableChildren = false;
+                    if (el.children) {
+                        hasExpandableChildren = el.children.some(function(child) {
+                            if (!child || !child.name) return false;
+                            var cType = (child.type || '').toLowerCase().trim();
+                            if (cType === 'attribute' || cType.includes('attribute')) return false;
+                            if (cType === 'port' || cType.includes('port')) return false;
+                            if (cType === 'doc') return false;
+                            if (PACKAGE_TYPES.has(cType) || cType.includes('package')) return false;
+                            return true;
+                        });
+                    }
+
                     // Click handlers - single click navigates, double click edits name
                     nodeG.on('click', function(event) {
                         event.stopPropagation();
@@ -8952,6 +9068,21 @@ export class VisualizationPanel {
                         // Start inline editing of the element name
                         startInlineEdit(nodeG, name, pos.x, pos.y, pos.width);
                     });
+
+                    // Right-click context menu for collapse/expand
+                    if (hasExpandableChildren) {
+                        nodeG.on('contextmenu', function(event) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            showNodeContextMenu(
+                                event.clientX,
+                                event.clientY,
+                                name,
+                                true,
+                                collapsedElements.has(name)
+                            );
+                        });
+                    }
 
                     // Add drag behavior for interactive node positioning
                     nodeG.style('cursor', 'grab');
@@ -8984,6 +9115,14 @@ export class VisualizationPanel {
                                 view: 'elk',
                                 positions: positionsToSave
                             });
+
+                            // Keep in-memory cache in sync so re-renders
+                            // (e.g. collapse/expand) use the latest positions
+                            if (currentData) {
+                                if (!currentData.savedPositions) currentData.savedPositions = {};
+                                if (!currentData.savedPositions.elk) currentData.savedPositions.elk = {};
+                                currentData.savedPositions.elk.positions = positionsToSave;
+                            }
                         });
                     nodeG.call(generalDrag);
 
@@ -9218,6 +9357,11 @@ export class VisualizationPanel {
                                 isContains: link.type === 'contains'
                             });
                         }
+                    });
+
+                    // Filter out connections to/from collapsed (hidden) children
+                    connections = connections.filter(function(conn) {
+                        return !hiddenByCollapse.has(conn.source) && !hiddenByCollapse.has(conn.target);
                     });
 
                     // Draw connections with orthogonal routing
@@ -10464,6 +10608,11 @@ export class VisualizationPanel {
                 rowHeights.push(maxHeight);
             }
 
+            // Retrieve any previously saved positions for this view
+            const savedIbdPositions = (currentData && currentData.savedPositions && currentData.savedPositions.ibd)
+                ? currentData.savedPositions.ibd.positions
+                : null;
+
             // Position parts in grid with variable row heights
             // Stagger alternate columns vertically to make connector routing clearer
             const partPositions = new Map();
@@ -10484,9 +10633,12 @@ export class VisualizationPanel {
                     yPos += staggerOffset;
                 }
 
+                const computedX = padding + col * (partWidth + horizontalSpacing);
+                const computedY = yPos;
+                const saved = savedIbdPositions && savedIbdPositions[part.name];
                 const posData = {
-                    x: padding + col * (partWidth + horizontalSpacing),
-                    y: yPos,
+                    x: saved ? saved.x : computedX,
+                    y: saved ? saved.y : computedY,
                     part: part,
                     height: partHeights.get(part.name) || 80
                 };
@@ -11449,6 +11601,17 @@ export class VisualizationPanel {
                     })
                     .on('end', function(event) {
                         d3.select(this).style('cursor', 'grab');
+
+                        var positionsToSave = {};
+                        partPositions.forEach(function(p, partName) {
+                            if (partName !== p.part.name) return;
+                            positionsToSave[partName] = { x: p.x, y: p.y };
+                        });
+                        vscode.postMessage({
+                            command: 'savePositions',
+                            view: 'ibd',
+                            positions: positionsToSave
+                        });
                     });
                 partG.call(ibdDrag);
             });
@@ -12396,6 +12559,11 @@ export class VisualizationPanel {
                 statesByLevel.get(level).push(s);
             });
 
+            // Retrieve any previously saved positions for this view
+            const savedStatePositions = (currentData && currentData.savedPositions && currentData.savedPositions.state)
+                ? currentData.savedPositions.state.positions
+                : null;
+
             // Position states based on layout orientation
             const statePositions = new Map();
             const maxLevel = Math.max(...Array.from(statesByLevel.keys()), 0);
@@ -12481,6 +12649,17 @@ export class VisualizationPanel {
                             state: state
                         });
                     });
+                });
+            }
+
+            // Apply saved positions as overrides (after layout computation)
+            if (savedStatePositions) {
+                statePositions.forEach(function(pos, key) {
+                    var saved = savedStatePositions[key];
+                    if (saved) {
+                        pos.x = saved.x;
+                        pos.y = saved.y;
+                    }
                 });
             }
 
@@ -12700,6 +12879,16 @@ export class VisualizationPanel {
                     })
                     .on('end', function(event) {
                         d3.select(this).style('cursor', 'grab');
+
+                        var positionsToSave = {};
+                        statePositions.forEach(function(p, key) {
+                            positionsToSave[key] = { x: p.x, y: p.y };
+                        });
+                        vscode.postMessage({
+                            command: 'savePositions',
+                            view: 'state',
+                            positions: positionsToSave
+                        });
                     });
 
                 stateElement.call(drag);
@@ -12834,6 +13023,11 @@ export class VisualizationPanel {
             const useCasePositions = new Map();
             const actionPositions = new Map();
             const requirementPositions = new Map();
+
+            // Retrieve any previously saved positions for this view
+            const savedUsecasePositions = (currentData && currentData.savedPositions && currentData.savedPositions.usecase)
+                ? currentData.savedPositions.usecase.positions
+                : null;
 
             if (usecaseLayoutOrientation === 'force') {
                 // Force-directed layout
@@ -13025,6 +13219,47 @@ export class VisualizationPanel {
                         });
                     });
                 }
+            }
+
+            // Apply saved positions as overrides (after layout computation)
+            if (savedUsecasePositions) {
+                actorPositions.forEach(function(pos, key) {
+                    var saved = savedUsecasePositions['actor:' + key];
+                    if (saved) { pos.x = saved.x; pos.y = saved.y; }
+                });
+                useCasePositions.forEach(function(pos, key) {
+                    var saved = savedUsecasePositions['usecase:' + key];
+                    if (saved) { pos.x = saved.x; pos.y = saved.y; }
+                });
+                requirementPositions.forEach(function(pos, key) {
+                    var saved = savedUsecasePositions['req:' + key];
+                    if (saved) { pos.x = saved.x; pos.y = saved.y; }
+                });
+                actionPositions.forEach(function(pos, key) {
+                    var saved = savedUsecasePositions['action:' + key];
+                    if (saved) { pos.x = saved.x; pos.y = saved.y; }
+                });
+            }
+
+            function saveUsecasePositions() {
+                var positionsToSave = {};
+                actorPositions.forEach(function(p, key) {
+                    positionsToSave['actor:' + key] = { x: p.x, y: p.y };
+                });
+                useCasePositions.forEach(function(p, key) {
+                    positionsToSave['usecase:' + key] = { x: p.x, y: p.y };
+                });
+                requirementPositions.forEach(function(p, key) {
+                    positionsToSave['req:' + key] = { x: p.x, y: p.y };
+                });
+                actionPositions.forEach(function(p, key) {
+                    positionsToSave['action:' + key] = { x: p.x, y: p.y };
+                });
+                vscode.postMessage({
+                    command: 'savePositions',
+                    view: 'usecase',
+                    positions: positionsToSave
+                });
             }
 
             // Helper function for case-insensitive position lookup
@@ -13285,6 +13520,7 @@ export class VisualizationPanel {
                     })
                     .on('end', function(event) {
                         d3.select(this).style('cursor', 'grab');
+                        saveUsecasePositions();
                     });
 
                 useCaseElement.call(useCaseDrag);
@@ -13397,6 +13633,7 @@ export class VisualizationPanel {
                     })
                     .on('end', function(event) {
                         d3.select(this).style('cursor', 'grab');
+                        saveUsecasePositions();
                     });
 
                 reqElement.call(reqDrag);
@@ -13496,6 +13733,7 @@ export class VisualizationPanel {
                     })
                     .on('end', function(event) {
                         d3.select(this).style('cursor', 'grab');
+                        saveUsecasePositions();
                     });
 
                 actorElement.call(actorDrag);
@@ -13602,6 +13840,7 @@ export class VisualizationPanel {
                         })
                         .on('end', function(event) {
                             d3.select(this).style('cursor', 'grab');
+                            saveUsecasePositions();
                         });
 
                     actionElement.call(actionDrag);
@@ -14189,6 +14428,61 @@ export class VisualizationPanel {
                 vscode.postMessage({ command: 'executeCommand', args: ['sysml.showSysRunner'] });
             });
         })();
+
+        // Context menu for collapse/expand
+        const nodeContextMenu = document.getElementById('node-context-menu');
+
+        function showNodeContextMenu(x, y, elementName, hasChildren, isCollapsed) {
+            if (!nodeContextMenu) return;
+            nodeContextMenu.innerHTML = '';
+
+            if (hasChildren) {
+                const item = document.createElement('div');
+                item.className = 'ctx-item';
+                item.textContent = isCollapsed ? '▶ Expand children' : '▼ Collapse children';
+                item.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    hideNodeContextMenu();
+                    if (isCollapsed) {
+                        collapsedElements.delete(elementName);
+                    } else {
+                        collapsedElements.add(elementName);
+                    }
+                    var collapsedArray = Array.from(collapsedElements);
+                    vscode.postMessage({
+                        command: 'saveCollapseState',
+                        view: 'elk',
+                        collapsed: collapsedArray
+                    });
+
+                    // Sync in-memory cache so re-render uses latest state
+                    if (currentData) {
+                        if (!currentData.savedPositions) currentData.savedPositions = {};
+                        if (!currentData.savedPositions.elk) currentData.savedPositions.elk = {};
+                        currentData.savedPositions.elk.collapsed = collapsedArray;
+                    }
+                    renderVisualization('elk');
+                });
+                nodeContextMenu.appendChild(item);
+            }
+
+            nodeContextMenu.style.left = x + 'px';
+            nodeContextMenu.style.top = y + 'px';
+            nodeContextMenu.style.display = 'block';
+        }
+
+        function hideNodeContextMenu() {
+            if (nodeContextMenu) {
+                nodeContextMenu.style.display = 'none';
+            }
+        }
+
+        document.addEventListener('click', function() {
+            hideNodeContextMenu();
+        });
+        document.addEventListener('contextmenu', function() {
+            hideNodeContextMenu();
+        });
 
         // Signal to the extension host that the webview is (re)initialized
         // so it can push the current model data (e.g. after being dragged
