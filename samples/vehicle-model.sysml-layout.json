@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "layouts": {
+    "elk": {
+      "positions": {}
+    },
+    "ibd": {
+      "positions": {},
+      "expanded": [
+        "Vehicle"
+      ]
+    }
+  }
+}

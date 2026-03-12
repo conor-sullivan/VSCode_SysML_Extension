@@ -1,0 +1,142 @@
+/* Anvil Design System Tokens — generated from internal/toolbox/anvil */
+
+/* ── Dark theme (default / :root) ─────────────────────────────────── */
+:root,
+[data-theme="dark"] {
+  /* Backgrounds */
+  --anvil-background:              hsla(228, 21%, 7%, 1);
+  --anvil-foreground:              hsla(228, 16%, 87%, 1);
+  --anvil-muted-background:        hsla(0, 0%, 100%, 0.05);
+  --anvil-muted-foreground:        hsla(220, 7%, 57%, 1);
+  --anvil-card-background:         hsla(228, 16%, 13%, 1);
+  --anvil-card-foreground:         hsla(228, 16%, 87%, 1);
+  --anvil-accent-background:       hsla(228, 16%, 27%, 1);
+  --anvil-accent-foreground:       hsla(228, 16%, 87%, 1);
+
+  /* Borders */
+  --anvil-border:                  hsla(0, 0%, 100%, 0.12);
+  --anvil-border-faint:            hsla(0, 0%, 100%, 0.06);
+  --anvil-border-emphasis:         hsla(0, 0%, 100%, 0.20);
+  --anvil-input:                   hsla(0, 0%, 100%, 0.05);
+  --anvil-ring-border:             hsla(220, 100%, 50%, 1);
+
+  /* Primaries */
+  --anvil-primary-background:      hsla(220, 100%, 50%, 1);
+  --anvil-primary-foreground:      hsla(228, 16%, 87%, 1);
+  --anvil-secondary-background:    hsla(228, 18%, 80%, 1);
+  --anvil-secondary-foreground:    hsla(228, 21%, 7%, 1);
+  --anvil-foreground-emphasis:     hsla(216, 96%, 68%, 1);
+
+  /* Destructive */
+  --anvil-destructive-background:  hsla(0, 70%, 50%, 0.10);
+  --anvil-destructive-foreground:  hsla(0, 70%, 50%, 1);
+
+  /* Semantic */
+  --anvil-success:                 hsla(140, 61%, 40%, 1);
+  --anvil-caution:                 hsla(45, 100%, 50%, 1);
+  --anvil-error:                   hsla(350, 67%, 54%, 1);
+
+  /* Interactive states */
+  --anvil-hover:                   hsla(0, 0%, 100%, 0.05);
+  --anvil-selected:                hsla(0, 0%, 100%, 0.15);
+  --anvil-input-hover:             hsla(0, 0%, 100%, 0.10);
+
+  /* Status */
+  --anvil-status-queued-background:          hsla(0, 0%, 100%, 0.05);
+  --anvil-status-queued-foreground:          hsla(220, 7%, 57%, 1);
+  --anvil-status-in-progress-background:     hsla(0, 0%, 100%, 0.10);
+  --anvil-status-in-progress-foreground:     hsla(220, 7%, 57%, 1);
+  --anvil-status-error-background:           hsla(0, 70%, 50%, 0.10);
+  --anvil-status-error-foreground:           hsla(0, 70%, 50%, 1);
+  --anvil-status-success-background:         hsla(142, 61%, 67%, 0.10);
+  --anvil-status-success-foreground:         hsla(142, 61%, 67%, 1);
+  --anvil-status-not-available-background:   hsla(0, 0%, 100%, 0.05);
+  --anvil-status-not-available-foreground:   hsla(217, 16%, 43%, 1);
+  --anvil-status-caution-background:         hsla(32, 100%, 60%, 0.10);
+  --anvil-status-caution-foreground:         hsla(45, 100%, 50%, 1);
+  --anvil-status-completed-background:       hsla(0, 0%, 100%, 0.10);
+  --anvil-status-completed-foreground:       hsla(228, 18%, 80%, 1);
+  --anvil-status-cancelled-background:       hsla(217, 17%, 53%, 0.10);
+  --anvil-status-cancelled-foreground:       hsla(217, 17%, 53%, 1);
+  --anvil-status-required-background:        hsla(45, 100%, 50%, 1);
+
+  /* Entity / affiliation */
+  --anvil-entity-friendly:         hsla(213, 95%, 76%, 1);
+  --anvil-entity-opposing:         hsla(0, 95%, 82%, 1);
+  --anvil-entity-neutral:          hsla(130, 69%, 73%, 1);
+  --anvil-entity-unknown:          hsla(0, 0%, 83%, 1);
+  --anvil-entity-civilian:         hsla(213, 95%, 76%, 1);
+
+  /* Chart accents (12 distinct hues for data viz) */
+  --anvil-chart-accent-1:          hsla(142, 61%, 67%, 1);   /* green   */
+  --anvil-chart-accent-2:          hsla(270, 100%, 72%, 1);  /* purple  */
+  --anvil-chart-accent-3:          hsla(32, 100%, 60%, 1);   /* orange  */
+  --anvil-chart-accent-4:          hsla(213, 95%, 76%, 1);   /* blue    */
+  --anvil-chart-accent-5:          hsla(0, 92%, 71%, 1);     /* red     */
+  --anvil-chart-accent-6:          hsla(45, 100%, 50%, 1);   /* yellow  */
+  --anvil-chart-accent-7:          hsla(83, 78%, 55%, 1);    /* lime    */
+  --anvil-chart-accent-8:          hsla(270, 95%, 75%, 1);   /* violet  */
+  --anvil-chart-accent-9:          hsla(234, 89%, 74%, 1);   /* indigo  */
+  --anvil-chart-accent-10:         hsla(213, 94%, 68%, 1);   /* cyan    */
+  --anvil-chart-accent-11:         hsla(329, 86%, 70%, 1);   /* pink    */
+  --anvil-chart-accent-12:         hsla(172, 66%, 50%, 1);   /* teal    */
+
+  /* 60% opacity chart accent variants */
+  --anvil-chart-accent-1-60:       hsla(142, 61%, 67%, 0.6);
+  --anvil-chart-accent-2-60:       hsla(270, 100%, 72%, 0.6);
+  --anvil-chart-accent-3-60:       hsla(32, 100%, 60%, 0.6);
+  --anvil-chart-accent-4-60:       hsla(213, 95%, 76%, 0.6);
+  --anvil-chart-accent-5-60:       hsla(0, 92%, 71%, 0.6);
+  --anvil-chart-accent-6-60:       hsla(45, 100%, 50%, 0.6);
+  --anvil-chart-accent-7-60:       hsla(83, 78%, 55%, 0.6);
+  --anvil-chart-accent-8-60:       hsla(270, 95%, 75%, 0.6);
+  --anvil-chart-accent-9-60:       hsla(234, 89%, 74%, 0.6);
+  --anvil-chart-accent-10-60:      hsla(213, 94%, 68%, 0.6);
+  --anvil-chart-accent-11-60:      hsla(329, 86%, 70%, 0.6);
+  --anvil-chart-accent-12-60:      hsla(172, 66%, 50%, 0.6);
+
+  /* Data type semantic pairs */
+  --anvil-data-type-1:             hsla(36, 8%, 14%, 1);
+  --anvil-data-type-1-fg:          hsla(32, 96%, 84%, 1);
+  --anvil-data-type-2:             hsla(90, 6%, 14%, 1);
+  --anvil-data-type-2-fg:          hsla(82, 84%, 80%, 1);
+  --anvil-data-type-3:             hsla(192, 20%, 14%, 1);
+  --anvil-data-type-3-fg:          hsla(168, 72%, 80%, 1);
+  --anvil-data-type-4:             hsla(220, 17%, 15%, 1);
+  --anvil-data-type-4-fg:          hsla(210, 93%, 86%, 1);
+  --anvil-data-type-5:             hsla(270, 13%, 17%, 1);
+  --anvil-data-type-5-fg:          hsla(270, 72%, 86%, 1);
+  --anvil-data-type-6:             hsla(300, 7%, 15%, 1);
+  --anvil-data-type-6-fg:          hsla(270, 100%, 90%, 1);
+  --anvil-data-type-generic-background: hsla(0, 0%, 100%, 0.05);
+  --anvil-data-type-generic-foreground: hsla(220, 7%, 57%, 1);
+
+  /* Scrim */
+  --anvil-scrim:                   hsla(0, 0%, 0%, 0.80);
+}
+
+/* ── Light theme overrides ─────────────────────────────────────────── */
+[data-theme="light"] {
+  --anvil-background:              hsla(228, 15%, 97%, 1);
+  --anvil-foreground:              hsla(228, 16%, 9%, 1);
+  --anvil-muted-background:        hsla(0, 0%, 0%, 0.05);
+  --anvil-muted-foreground:        hsla(217, 16%, 43%, 1);
+  --anvil-card-background:         hsla(0, 0%, 100%, 1);
+  --anvil-card-foreground:         hsla(0, 0%, 9%, 1);
+  --anvil-accent-background:       hsla(220, 92%, 94%, 1);
+  --anvil-accent-foreground:       hsla(228, 16%, 9%, 1);
+  --anvil-border:                  hsla(0, 0%, 0%, 0.10);
+  --anvil-border-faint:            hsla(0, 0%, 0%, 0.07);
+  --anvil-border-emphasis:         hsla(0, 0%, 0%, 0.20);
+  --anvil-input:                   hsla(0, 0%, 0%, 0.05);
+  --anvil-foreground-emphasis:     hsla(220, 100%, 50%, 1);
+  --anvil-hover:                   hsla(0, 0%, 0%, 0.05);
+  --anvil-selected:                hsla(0, 0%, 0%, 0.15);
+  --anvil-input-hover:             hsla(0, 0%, 0%, 0.10);
+  --anvil-scrim:                   hsla(0, 0%, 100%, 0.80);
+  --anvil-status-completed-background: hsla(228, 21%, 7%, 1);
+  --anvil-status-completed-foreground: hsla(228, 21%, 7%, 1);
+  --anvil-status-not-available-foreground: hsla(0, 0%, 100%, 1);
+  --anvil-status-cancelled-background: hsla(0, 0%, 100%, 1);
+  --anvil-status-cancelled-foreground: hsla(0, 0%, 100%, 1);
+}

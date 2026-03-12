@@ -820,6 +820,7 @@ export class VisualizationPanel {
         const cytoscapeUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'vendor', 'cytoscape.min.js'));
         const cytoscapeElkUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'vendor', 'cytoscape-elk.js'));
         const cytoscapeSvgUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'vendor', 'cytoscape-svg.js'));
+        const anvilTokensUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'vendor', 'anvil-tokens.css'));
         const nonce = _getNonce();
 
         return `<!DOCTYPE html>
@@ -829,6 +830,7 @@ export class VisualizationPanel {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource}; worker-src blob:;">
     <title>SysML Model Visualizer</title>
+    <link rel="stylesheet" href="${anvilTokensUri}">
     <script nonce="${nonce}" src="${d3Uri}"></script>
     <script nonce="${nonce}" src="${elkUri}"></script>
     <script nonce="${nonce}" src="${cytoscapeUri}"></script>
@@ -901,6 +903,64 @@ export class VisualizationPanel {
         button:active {
             opacity: 0.9;
         }
+        /* ── Anvil Style Panel ─────────────────────────────────── */
+        .style-swatch {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            border: 1.5px solid transparent;
+            cursor: pointer;
+            padding: 0;
+            flex-shrink: 0;
+            transition: transform 0.1s ease, border-color 0.1s ease;
+        }
+        .style-swatch:hover {
+            border-color: var(--anvil-border-emphasis, rgba(255,255,255,0.3));
+            transform: scale(1.15);
+        }
+        .style-swatch.selected {
+            border-color: var(--anvil-primary-background, #0055ff);
+            box-shadow: 0 0 0 1px var(--anvil-primary-background, #0055ff);
+        }
+        .clear-swatch {
+            background: var(--vscode-editor-background) !important;
+            color: var(--vscode-descriptionForeground);
+            font-size: 9px;
+            line-height: 20px;
+            text-align: center;
+            border: 1px solid var(--vscode-panel-border) !important;
+        }
+        .style-preset-btn {
+            padding: 3px 8px;
+            font-size: 10px;
+            border-radius: 4px;
+            border: 1.5px solid var(--preset-color, var(--vscode-panel-border));
+            background: transparent;
+            color: var(--vscode-editor-foreground);
+            cursor: pointer;
+            transition: background 0.1s ease;
+            margin-right: 0;
+        }
+        .style-preset-btn:hover {
+            background: var(--preset-color, var(--vscode-panel-border));
+            opacity: 0.9;
+        }
+        .style-border-style-btn {
+            padding: 3px 8px;
+            font-size: 12px;
+            border-radius: 3px;
+            border: 1px solid var(--vscode-panel-border);
+            background: transparent;
+            color: var(--vscode-editor-foreground);
+            cursor: pointer;
+            margin-right: 0;
+        }
+        .style-border-style-btn.active {
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border-color: var(--vscode-button-background);
+        }
+        /* ───────────────────────────────────────────────────────── */
         .view-btn {
             background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
             color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
@@ -1626,12 +1686,83 @@ export class VisualizationPanel {
             <button id="minimap-toolbar-btn" class="action-btn" title="Toggle minimap">⊡ Map</button>
             <button id="legend-btn" class="action-btn" title="Show diagram legend">🔑 Legend</button>
             <div class="style-dropdown" style="position: relative; display: inline-block;">
-                <button id="style-btn" class="action-btn" title="Style selected element (border color)">◇ Style</button>
-                <div id="style-menu" class="export-menu" style="min-width: 200px;">
+                <button id="style-btn" class="action-btn" title="Style selected element">◇ Style</button>
+                <div id="style-menu" class="export-menu" style="min-width: 260px; padding: 0;">
                     <div id="style-selection-label" style="padding: 6px 10px; font-size: 11px; color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-panel-border);">Select an element in the diagram</div>
-                    <label style="display: block; padding: 6px 10px 0; font-size: 10px; color: var(--vscode-descriptionForeground);">Border color</label>
-                    <input type="color" id="style-border-color" style="margin: 4px 10px; width: 36px; height: 22px; cursor: pointer; border: 1px solid var(--vscode-input-border); border-radius: 3px;">
-                    <button id="style-apply-btn" class="primary-btn" style="margin: 8px 10px; display: block;">Apply</button>
+                    <!-- Quick presets -->
+                    <div style="padding: 6px 10px 4px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground); opacity: 0.8;">Quick Style</div>
+                    <div style="display: flex; gap: 6px; padding: 0 10px 8px; flex-wrap: wrap;">
+                        <button class="style-preset-btn" data-preset="warning"   style="--preset-color: var(--anvil-caution);">Warning</button>
+                        <button class="style-preset-btn" data-preset="error"     style="--preset-color: var(--anvil-error);">Error</button>
+                        <button class="style-preset-btn" data-preset="success"   style="--preset-color: var(--anvil-success);">OK</button>
+                        <button class="style-preset-btn" data-preset="highlight" style="--preset-color: var(--anvil-primary-background);">Highlight</button>
+                        <button class="style-preset-btn" data-preset="muted"     style="--preset-color: var(--anvil-muted-foreground);">Muted</button>
+                    </div>
+                    <!-- Border color swatches -->
+                    <div style="padding: 0 10px 4px; border-top: 1px solid var(--vscode-panel-border);">
+                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground); opacity: 0.8; padding: 6px 0 4px;">Border Color</div>
+                        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-chart-accent-1)"  style="background: var(--anvil-chart-accent-1);"  title="Green"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-chart-accent-2)"  style="background: var(--anvil-chart-accent-2);"  title="Purple"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-chart-accent-3)"  style="background: var(--anvil-chart-accent-3);"  title="Orange"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-chart-accent-4)"  style="background: var(--anvil-chart-accent-4);"  title="Blue"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-chart-accent-5)"  style="background: var(--anvil-chart-accent-5);"  title="Red"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-chart-accent-6)"  style="background: var(--anvil-chart-accent-6);"  title="Yellow"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-chart-accent-7)"  style="background: var(--anvil-chart-accent-7);"  title="Lime"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-chart-accent-8)"  style="background: var(--anvil-chart-accent-8);"  title="Violet"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-chart-accent-9)"  style="background: var(--anvil-chart-accent-9);"  title="Indigo"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-chart-accent-10)" style="background: var(--anvil-chart-accent-10);" title="Cyan"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-chart-accent-11)" style="background: var(--anvil-chart-accent-11);" title="Pink"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-chart-accent-12)" style="background: var(--anvil-chart-accent-12);" title="Teal"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-success)"          style="background: var(--anvil-success);"          title="Success"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-caution)"          style="background: var(--anvil-caution);"          title="Caution"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-error)"            style="background: var(--anvil-error);"            title="Error"></button>
+                            <button class="style-swatch" data-target="border" data-color="var(--anvil-primary-background)" style="background: var(--anvil-primary-background);" title="Primary"></button>
+                        </div>
+                    </div>
+                    <!-- Fill color swatches -->
+                    <div style="padding: 0 10px 4px; border-top: 1px solid var(--vscode-panel-border);">
+                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground); opacity: 0.8; padding: 6px 0 4px;">Fill Color</div>
+                        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                            <button class="style-swatch" data-target="fill" data-color="var(--anvil-chart-accent-1-60)"  style="background: var(--anvil-chart-accent-1-60);"  title="Green (60%)"></button>
+                            <button class="style-swatch" data-target="fill" data-color="var(--anvil-chart-accent-2-60)"  style="background: var(--anvil-chart-accent-2-60);"  title="Purple (60%)"></button>
+                            <button class="style-swatch" data-target="fill" data-color="var(--anvil-chart-accent-3-60)"  style="background: var(--anvil-chart-accent-3-60);"  title="Orange (60%)"></button>
+                            <button class="style-swatch" data-target="fill" data-color="var(--anvil-chart-accent-4-60)"  style="background: var(--anvil-chart-accent-4-60);"  title="Blue (60%)"></button>
+                            <button class="style-swatch" data-target="fill" data-color="var(--anvil-chart-accent-5-60)"  style="background: var(--anvil-chart-accent-5-60);"  title="Red (60%)"></button>
+                            <button class="style-swatch" data-target="fill" data-color="var(--anvil-chart-accent-6-60)"  style="background: var(--anvil-chart-accent-6-60);"  title="Yellow (60%)"></button>
+                            <button class="style-swatch" data-target="fill" data-color="var(--anvil-status-error-background)"   style="background: var(--anvil-status-error-background);"   title="Error bg"></button>
+                            <button class="style-swatch" data-target="fill" data-color="var(--anvil-status-success-background)" style="background: var(--anvil-status-success-background);" title="Success bg"></button>
+                            <button class="style-swatch" data-target="fill" data-color="var(--anvil-status-caution-background)" style="background: var(--anvil-status-caution-background);" title="Caution bg"></button>
+                            <button class="style-swatch" data-target="fill" data-color="var(--anvil-card-background)"    style="background: var(--anvil-card-background);"    title="Card bg"></button>
+                            <button class="style-swatch" data-target="fill" data-color="var(--anvil-accent-background)"  style="background: var(--anvil-accent-background);"  title="Accent bg"></button>
+                            <button class="style-swatch clear-swatch" data-target="fill" data-color="" title="Clear fill">✕</button>
+                        </div>
+                    </div>
+                    <!-- Border style + width -->
+                    <div style="padding: 6px 10px 6px; border-top: 1px solid var(--vscode-panel-border); display: flex; align-items: center; gap: 10px;">
+                        <div>
+                            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground); opacity: 0.8; margin-bottom: 4px;">Style</div>
+                            <div style="display: flex; gap: 4px;">
+                                <button class="style-border-style-btn active" data-style="solid"  title="Solid border">—</button>
+                                <button class="style-border-style-btn"        data-style="dashed" title="Dashed border">╌</button>
+                                <button class="style-border-style-btn"        data-style="dotted" title="Dotted border">⋯</button>
+                            </div>
+                        </div>
+                        <div>
+                            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground); opacity: 0.8; margin-bottom: 4px;">Width</div>
+                            <input type="number" id="style-border-width" min="1" max="8" value="2" style="width: 44px; padding: 3px 6px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 3px; font-size: 11px;">
+                        </div>
+                    </div>
+                    <!-- Opacity slider -->
+                    <div style="padding: 4px 10px 8px; border-top: 1px solid var(--vscode-panel-border);">
+                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground); opacity: 0.8; margin-bottom: 4px;">Opacity: <span id="style-opacity-val">100%</span></div>
+                        <input type="range" id="style-opacity" min="10" max="100" value="100" step="5" style="width: 100%; cursor: pointer;">
+                    </div>
+                    <!-- Actions -->
+                    <div style="padding: 6px 10px 8px; border-top: 1px solid var(--vscode-panel-border); display: flex; gap: 6px;">
+                        <button id="style-apply-btn" class="primary-btn" style="flex: 1;">Apply</button>
+                        <button id="style-reset-btn" style="flex: 0 0 auto; padding: 4px 8px; background: transparent; border: 1px solid var(--vscode-panel-border); color: var(--vscode-editor-foreground); border-radius: 3px; font-size: 11px; cursor: pointer;" title="Reset to defaults">Reset</button>
+                    </div>
                 </div>
             </div>
             <button id="ee-egg" title="What's this?">🥚</button>
@@ -1775,6 +1906,18 @@ export class VisualizationPanel {
 
     <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
+
+        // ── Anvil theme bridge ──────────────────────────────────────────
+        // Maps VSCode body class (vscode-dark / vscode-light) to Anvil data-theme attribute
+        (function syncAnvilTheme() {
+            const theme = document.body.classList.contains('vscode-light') ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+        new MutationObserver(function() {
+            const theme = document.body.classList.contains('vscode-light') ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', theme);
+        }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        // ───────────────────────────────────────────────────────────────
 
         // ELK Worker URL (must be set before ELK is instantiated)
         const elkWorkerUrl = '${elkWorkerUri}';
@@ -3524,33 +3667,35 @@ export class VisualizationPanel {
         /**
          * Type colors - SysML v2 compliant color scheme (shared across all views)
          */
+        // Anvil design-system semantic color tokens mapped to SysML element types.
+        // All values are CSS custom properties defined in anvil-tokens.css.
         const typeColors = {
-            'part def': '#4EC9B0',      // Teal for definitions
-            'part': '#4EC9B0',          // Teal for parts
-            'port def': '#C586C0',      // Purple for port defs
-            'port': '#C586C0',          // Purple for ports
-            'attribute def': '#9CDCFE', // Light blue for attr defs
-            'attribute': '#9CDCFE',     // Light blue for attributes
-            'action def': '#DCDCAA',    // Yellow for action defs
-            'action': '#DCDCAA',        // Yellow for actions
-            'state def': '#CE9178',     // Orange for state defs
-            'state': '#CE9178',         // Orange for states
-            'interface def': '#D7BA7D', // Gold for interface defs
-            'interface': '#D7BA7D',     // Gold for interfaces
-            'requirement def': '#B5CEA8', // Green for req defs
-            'requirement': '#B5CEA8',   // Green for requirements
-            'use case def': '#569CD6',  // Blue for use case defs
-            'use case': '#569CD6',      // Blue for use cases
-            'verification': '#C586C0',  // Purple for verification
-            'analysis': '#DCDCAA',      // Yellow for analysis
-            'allocation': '#D4D4D4',    // Gray for allocations
-            'item def': '#6A9955',      // Dim green for item defs
-            'item': '#6A9955',          // Dim green for items
-            'calc def': '#DCDCAA',      // Yellow for calc defs
-            'calc': '#DCDCAA',          // Yellow for calcs
-            'constraint def': '#F14C4C', // Red for constraint defs
-            'constraint': '#F14C4C',    // Red for constraints
-            'default': 'var(--vscode-panel-border)'
+            'part def':        'var(--anvil-chart-accent-1)',   // green  — structural definitions
+            'part':            'var(--anvil-chart-accent-1)',   // green  — structural usages
+            'port def':        'var(--anvil-chart-accent-8)',   // violet — interface definitions
+            'port':            'var(--anvil-chart-accent-8)',   // violet — interface usages
+            'attribute def':   'var(--anvil-chart-accent-4)',   // blue   — data definitions
+            'attribute':       'var(--anvil-chart-accent-4)',   // blue   — data usages
+            'action def':      'var(--anvil-chart-accent-3)',   // orange — behavior definitions
+            'action':          'var(--anvil-chart-accent-3)',   // orange — behavior usages
+            'state def':       'var(--anvil-chart-accent-5)',   // red    — state machine definitions
+            'state':           'var(--anvil-chart-accent-5)',   // red    — state machine usages
+            'interface def':   'var(--anvil-chart-accent-6)',   // yellow — connection definitions
+            'interface':       'var(--anvil-chart-accent-6)',   // yellow — connection usages
+            'requirement def': 'var(--anvil-entity-friendly)',  // blue.300 — satisfaction
+            'requirement':     'var(--anvil-entity-friendly)',  // blue.300 — satisfaction
+            'use case def':    'var(--anvil-primary-background)', // blue.500
+            'use case':        'var(--anvil-primary-background)', // blue.500
+            'verification':    'var(--anvil-status-in-progress-foreground)',
+            'analysis':        'var(--anvil-chart-accent-7)',   // lime
+            'allocation':      'var(--anvil-muted-foreground)', // subdued
+            'item def':        'var(--anvil-chart-accent-2)',   // purple
+            'item':            'var(--anvil-chart-accent-2)',   // purple
+            'calc def':        'var(--anvil-caution)',          // yellow/caution
+            'calc':            'var(--anvil-caution)',          // yellow/caution
+            'constraint def':  'var(--anvil-error)',            // red — constraint violation
+            'constraint':      'var(--anvil-error)',            // red — constraint violation
+            'default':         'var(--anvil-border)'
         };
 
         /**
@@ -3565,6 +3710,38 @@ export class VisualizationPanel {
                 if (key !== 'default' && t.includes(key)) return typeColors[key];
             }
             return typeColors['default'];
+        }
+
+        // Quick-style presets — mirrors ELEMENT_STYLE_PRESETS from layoutStorage.ts
+        const ELEMENT_STYLE_PRESETS = {
+            warning:   { borderColor: 'var(--anvil-caution)',            borderWidth: 3, accentColor: 'var(--anvil-caution)' },
+            error:     { borderColor: 'var(--anvil-error)',              borderWidth: 3, accentColor: 'var(--anvil-error)' },
+            success:   { borderColor: 'var(--anvil-success)',            accentColor: 'var(--anvil-success)' },
+            highlight: { borderColor: 'var(--anvil-primary-background)', borderWidth: 3 },
+            muted:     { opacity: 0.4 },
+        };
+
+        /**
+         * Resolve the full style for a named element in a given view.
+         * Merges preset (if any) with per-property overrides; per-property wins.
+         * Falls through to renderer defaults for anything not set.
+         */
+        function resolveElementStyle(name, viewKey, defaultTypeColor) {
+            const savedStyles = currentData && currentData.savedPositions &&
+                currentData.savedPositions[viewKey] && currentData.savedPositions[viewKey].elementStyles;
+            const raw = (savedStyles && savedStyles[name]) || {};
+            const presetBase = (raw.preset && ELEMENT_STYLE_PRESETS[raw.preset]) || {};
+            const merged = Object.assign({}, presetBase, raw);
+            return {
+                strokeColor:  merged.borderColor  || defaultTypeColor,
+                strokeWidth:  merged.borderWidth  ? (merged.borderWidth + 'px') : null,
+                strokeDash:   merged.borderStyle === 'dashed' ? '6,3'
+                            : merged.borderStyle === 'dotted' ? '2,2' : null,
+                fillColor:    merged.fillColor    || null,
+                textColor:    merged.textColor    || null,
+                opacity:      (merged.opacity != null) ? merged.opacity : 1,
+                accentColor:  merged.accentColor  || defaultTypeColor,
+            };
         }
 
         function isActorElement(elementOrType) {
@@ -8937,9 +9114,13 @@ export class VisualizationPanel {
                         .attr('data-element-name', name)
                         .style('cursor', 'pointer');
 
-                    // Background - definitions have dashed border, usages have solid bold border; per-element style override
-                    var _nodeStroke = (elkElStyles && elkElStyles[name] && elkElStyles[name].borderColor) || (isLibValidated ? '#4EC9B0' : typeColor);
-                    var _nodeStrokeW = isUsage ? '3px' : '2px';
+                    // Background — per-element style overrides via resolveElementStyle
+                    var _elkStyle = resolveElementStyle(name, 'elk', isLibValidated ? 'var(--anvil-success)' : typeColor);
+                    var _nodeStroke = _elkStyle.strokeColor;
+                    var _nodeStrokeW = _elkStyle.strokeWidth || (isUsage ? '3px' : '2px');
+                    var _nodeStrokeDash = _elkStyle.strokeDash !== null ? _elkStyle.strokeDash : (isDefinition ? '6,3' : 'none');
+                    var _nodeFill = _elkStyle.fillColor || 'var(--vscode-editor-background)';
+                    nodeG.style('opacity', _elkStyle.opacity);
                     nodeG.append('rect')
                         .attr('class', 'node-background')
                         .attr('width', pos.width)
@@ -8947,17 +9128,17 @@ export class VisualizationPanel {
                         .attr('rx', isDefinition ? 4 : 8)
                         .attr('data-original-stroke', _nodeStroke)
                         .attr('data-original-width', _nodeStrokeW)
-                        .style('fill', 'var(--vscode-editor-background)')
+                        .style('fill', _nodeFill)
                         .style('stroke', _nodeStroke)
                         .style('stroke-width', _nodeStrokeW)
-                        .style('stroke-dasharray', isDefinition ? '6,3' : 'none');
+                        .style('stroke-dasharray', _nodeStrokeDash);
 
                     // Type color bar at top
                     nodeG.append('rect')
                         .attr('width', pos.width)
                         .attr('height', 5)
                         .attr('rx', 2)
-                        .style('fill', typeColor);
+                        .style('fill', _elkStyle.accentColor);
 
                     // Header background
                     nodeG.append('rect')
@@ -8992,7 +9173,7 @@ export class VisualizationPanel {
                         .attr('text-anchor', 'middle')
                         .text('\\u00AB' + stereoDisplay + '\\u00BB')
                         .style('font-size', '9px')
-                        .style('fill', typeColor);
+                        .style('fill', _elkStyle.textColor || typeColor);
 
                     // Name - show with type if it's a usage (e.g., "partName : PartType")
                     var displayName = truncateText(name, 26);
@@ -11598,27 +11779,30 @@ export class VisualizationPanel {
                     .attr('data-element-name', part.name)
                     .style('cursor', 'pointer');
 
-                // Part box (main rectangle) - matching General View; per-element style override
-                var ibdElStyles = currentData && currentData.savedPositions && currentData.savedPositions.ibd && currentData.savedPositions.ibd.elementStyles;
-                var _ibdStroke = (ibdElStyles && ibdElStyles[part.name] && ibdElStyles[part.name].borderColor) || (isLibValidated ? '#4EC9B0' : typeColor);
-                var _ibdStrokeW = isUsage ? '3px' : '2px';
+                // Part box (main rectangle) - per-element style overrides via resolveElementStyle
+                var _ibdStyle = resolveElementStyle(part.name, 'ibd', isLibValidated ? 'var(--anvil-success)' : typeColor);
+                var _ibdStroke = _ibdStyle.strokeColor;
+                var _ibdStrokeW = _ibdStyle.strokeWidth || (isUsage ? '3px' : '2px');
+                var _ibdStrokeDash = _ibdStyle.strokeDash !== null ? _ibdStyle.strokeDash : (isDefinition ? '6,3' : 'none');
+                var _ibdFill = _ibdStyle.fillColor || 'var(--vscode-editor-background)';
+                partG.style('opacity', _ibdStyle.opacity);
                 partG.append('rect')
                     .attr('width', partWidth)
                     .attr('height', totalHeight)
-                    .attr('rx', isUsage ? 8 : 4)  // Rounded for usages, slightly rounded for defs
+                    .attr('rx', isUsage ? 8 : 4)
                     .attr('data-original-stroke', _ibdStroke)
                     .attr('data-original-width', _ibdStrokeW)
-                    .style('fill', 'var(--vscode-editor-background)')
+                    .style('fill', _ibdFill)
                     .style('stroke', _ibdStroke)
                     .style('stroke-width', _ibdStrokeW)
-                    .style('stroke-dasharray', isDefinition ? '6,3' : 'none');
+                    .style('stroke-dasharray', _ibdStrokeDash);
 
                 // Type color bar at top (General View style)
                 partG.append('rect')
                     .attr('width', partWidth)
                     .attr('height', 5)
                     .attr('rx', 2)
-                    .style('fill', typeColor);
+                    .style('fill', _ibdStyle.accentColor);
 
                 // Header background
                 partG.append('rect')
@@ -11641,7 +11825,7 @@ export class VisualizationPanel {
                     .attr('text-anchor', 'middle')
                     .text('«' + stereoDisplay + '»')  // Use proper guillemets
                     .style('font-size', '9px')
-                    .style('fill', typeColor);
+                    .style('fill', _ibdStyle.textColor || typeColor);
 
                 // Part name
                 const displayName = part.name.length > 18 ? part.name.substring(0, 16) + '..' : part.name;
@@ -13244,9 +13428,8 @@ export class VisualizationPanel {
                         .style('fill', 'var(--vscode-editor-foreground)');
 
                 } else {
-                    // Regular state: rounded rectangle with gradient; per-element style override
-                    const stateElStyles = currentData && currentData.savedPositions && currentData.savedPositions.state && currentData.savedPositions.state.elementStyles;
-                    const stateStroke = (stateElStyles && stateElStyles[state.name] && stateElStyles[state.name].borderColor) || 'var(--vscode-charts-blue)';
+                    // Regular state: rounded rectangle with gradient; per-element style overrides via resolveElementStyle
+                    var _stateStyle = resolveElementStyle(state.name, 'state', 'var(--anvil-chart-accent-5)');
                     const gradient = defs.append('linearGradient')
                         .attr('id', 'state-gradient-' + stateKey.replace(/[^a-zA-Z0-9]/g, '_'))
                         .attr('x1', '0%').attr('y1', '0%')
@@ -13258,14 +13441,15 @@ export class VisualizationPanel {
                         .attr('offset', '100%')
                         .style('stop-color', 'var(--vscode-editorWidget-background)');
 
+                    stateElement.style('opacity', _stateStyle.opacity);
                     stateElement.append('rect')
                         .attr('width', stateWidth)
                         .attr('height', stateHeight)
                         .attr('rx', 8)
                         .attr('ry', 8)
-                        .style('fill', 'url(#state-gradient-' + stateKey.replace(/[^a-zA-Z0-9]/g, '_') + ')')
-                        .style('stroke', stateStroke)
-                        .style('stroke-width', '2px')
+                        .style('fill', _stateStyle.fillColor || ('url(#state-gradient-' + stateKey.replace(/[^a-zA-Z0-9]/g, '_') + ')'))
+                        .style('stroke', _stateStyle.strokeColor)
+                        .style('stroke-width', _stateStyle.strokeWidth || '2px')
                         .style('filter', 'drop-shadow(2px 2px 3px rgba(0,0,0,0.2))');
 
                     // State name - centered
@@ -13853,17 +14037,17 @@ export class VisualizationPanel {
 
                 useCaseElement.call(useCaseDrag);
 
-                // Use case oval; per-element style override
-                const usecaseElStyles = currentData && currentData.savedPositions && currentData.savedPositions.usecase && currentData.savedPositions.usecase.elementStyles;
-                const usecaseStroke = (usecaseElStyles && usecaseElStyles[useCase.name] && usecaseElStyles[useCase.name].borderColor) || 'var(--vscode-charts-purple)';
+                // Use case oval; per-element style overrides via resolveElementStyle
+                var _ucStyle = resolveElementStyle(useCase.name, 'usecase', 'var(--anvil-primary-background)');
+                useCaseElement.style('opacity', _ucStyle.opacity);
                 useCaseElement.append('ellipse')
                     .attr('cx', useCaseWidth / 2)
                     .attr('cy', useCaseHeight / 2)
                     .attr('rx', useCaseWidth / 2)
                     .attr('ry', useCaseHeight / 2)
-                    .style('fill', 'var(--vscode-editor-background)')
-                    .style('stroke', usecaseStroke)
-                    .style('stroke-width', '2px');
+                    .style('fill', _ucStyle.fillColor || 'var(--vscode-editor-background)')
+                    .style('stroke', _ucStyle.strokeColor)
+                    .style('stroke-width', _ucStyle.strokeWidth || '2px');
 
                 // Click handlers: single-click navigate, double-click edit
                 useCaseElement.on('click', function(event) {
@@ -14713,46 +14897,166 @@ export class VisualizationPanel {
             }
         });
 
-        // Style menu: toggle and update selection label / color from saved styles
+        // Style menu: toggle, swatch selection, preset apply, and full style send
         (function initStyleMenu() {
             const styleBtn = document.getElementById('style-btn');
             const styleMenu = document.getElementById('style-menu');
             const styleSelectionLabel = document.getElementById('style-selection-label');
-            const styleBorderColor = document.getElementById('style-border-color');
+            const styleBorderWidth = document.getElementById('style-border-width');
+            const styleOpacity = document.getElementById('style-opacity');
+            const styleOpacityVal = document.getElementById('style-opacity-val');
             const styleApplyBtn = document.getElementById('style-apply-btn');
-            if (!styleBtn || !styleMenu || !styleSelectionLabel || !styleBorderColor || !styleApplyBtn) return;
+            const styleResetBtn = document.getElementById('style-reset-btn');
+            if (!styleBtn || !styleMenu || !styleSelectionLabel || !styleApplyBtn) return;
 
+            // Transient style state — reset when menu opens
+            let _pendingStyle = {};
+
+            // ── Helpers ──────────────────────────────────────────────────
+            function setActiveSwatch(target, color) {
+                styleMenu.querySelectorAll('.style-swatch[data-target="' + target + '"]').forEach(function(s) {
+                    s.classList.toggle('selected', s.getAttribute('data-color') === color);
+                });
+            }
+            function setActiveBorderStyle(val) {
+                styleMenu.querySelectorAll('.style-border-style-btn').forEach(function(b) {
+                    b.classList.toggle('active', b.getAttribute('data-style') === val);
+                });
+            }
+
+            function loadCurrentStyles() {
+                _pendingStyle = {};
+                if (!selectedElementName || !selectedElementView) return;
+                const elStyles = currentData && currentData.savedPositions &&
+                    currentData.savedPositions[selectedElementView] &&
+                    currentData.savedPositions[selectedElementView].elementStyles;
+                const saved = (elStyles && elStyles[selectedElementName]) || {};
+                _pendingStyle = Object.assign({}, saved);
+
+                // Populate border color swatches
+                if (saved.borderColor) setActiveSwatch('border', saved.borderColor);
+                // Populate fill color swatches
+                if (saved.fillColor) setActiveSwatch('fill', saved.fillColor);
+                // Border style buttons
+                setActiveBorderStyle(saved.borderStyle || 'solid');
+                // Border width
+                if (styleBorderWidth) styleBorderWidth.value = saved.borderWidth || 2;
+                // Opacity
+                if (styleOpacity) {
+                    const pct = Math.round((saved.opacity != null ? saved.opacity : 1) * 100);
+                    styleOpacity.value = pct;
+                    if (styleOpacityVal) styleOpacityVal.textContent = pct + '%';
+                }
+            }
+
+            // ── Open/close ───────────────────────────────────────────────
             styleBtn.addEventListener('click', function(e) {
                 e.stopPropagation();
                 const isVisible = styleMenu.classList.contains('show');
                 if (!isVisible) {
                     const btnRect = styleBtn.getBoundingClientRect();
-                    styleMenu.style.left = (btnRect.right - 200) + 'px';
+                    styleMenu.style.left = Math.max(0, btnRect.right - 260) + 'px';
                     styleMenu.style.top = (btnRect.bottom + 4) + 'px';
                     if (selectedElementName && selectedElementView) {
                         styleSelectionLabel.textContent = selectedElementView + ': ' + selectedElementName;
-                        const elStyles = currentData && currentData.savedPositions && currentData.savedPositions[selectedElementView] && currentData.savedPositions[selectedElementView].elementStyles;
-                        const bc = elStyles && elStyles[selectedElementName] && elStyles[selectedElementName].borderColor;
-                        styleBorderColor.value = bc && /^#[0-9A-Fa-f]{6}$/.test(bc) ? bc : '#569CD6';
+                        loadCurrentStyles();
                     } else {
                         styleSelectionLabel.textContent = 'Select an element in the diagram';
-                        styleBorderColor.value = '#569CD6';
+                        _pendingStyle = {};
                     }
                 }
                 styleMenu.classList.toggle('show', !isVisible);
             });
 
+            // ── Swatch clicks ────────────────────────────────────────────
+            styleMenu.addEventListener('click', function(e) {
+                const swatchBtn = e.target.closest('.style-swatch');
+                if (swatchBtn) {
+                    e.stopPropagation();
+                    const target = swatchBtn.getAttribute('data-target');
+                    const color  = swatchBtn.getAttribute('data-color');
+                    if (target === 'border') {
+                        if (color) { _pendingStyle.borderColor = color; }
+                        else { delete _pendingStyle.borderColor; }
+                        setActiveSwatch('border', color);
+                    } else if (target === 'fill') {
+                        if (color) { _pendingStyle.fillColor = color; }
+                        else { delete _pendingStyle.fillColor; }
+                        setActiveSwatch('fill', color);
+                    }
+                }
+            });
+
+            // ── Preset buttons ───────────────────────────────────────────
+            styleMenu.addEventListener('click', function(e) {
+                const presetBtn = e.target.closest('.style-preset-btn');
+                if (presetBtn) {
+                    e.stopPropagation();
+                    if (!selectedElementName || !selectedElementView) return;
+                    const preset = presetBtn.getAttribute('data-preset');
+                    vscode.postMessage({
+                        command: 'saveElementStyles',
+                        view: selectedElementView,
+                        elementName: selectedElementName,
+                        style: { preset: preset }
+                    });
+                    styleMenu.classList.remove('show');
+                }
+            });
+
+            // ── Border style segmented control ────────────────────────────
+            styleMenu.addEventListener('click', function(e) {
+                const bsBtn = e.target.closest('.style-border-style-btn');
+                if (bsBtn) {
+                    e.stopPropagation();
+                    const styleVal = bsBtn.getAttribute('data-style');
+                    _pendingStyle.borderStyle = styleVal;
+                    setActiveBorderStyle(styleVal);
+                }
+            });
+
+            // ── Border width stepper ──────────────────────────────────────
+            if (styleBorderWidth) {
+                styleBorderWidth.addEventListener('input', function() {
+                    const w = parseInt(this.value);
+                    if (!isNaN(w) && w > 0) _pendingStyle.borderWidth = w;
+                });
+            }
+
+            // ── Opacity slider ────────────────────────────────────────────
+            if (styleOpacity) {
+                styleOpacity.addEventListener('input', function() {
+                    const pct = parseInt(this.value);
+                    _pendingStyle.opacity = pct / 100;
+                    if (styleOpacityVal) styleOpacityVal.textContent = pct + '%';
+                });
+            }
+
+            // ── Apply ─────────────────────────────────────────────────────
             styleApplyBtn.addEventListener('click', function() {
                 if (!selectedElementName || !selectedElementView) return;
-                const borderColor = styleBorderColor.value;
                 vscode.postMessage({
                     command: 'saveElementStyles',
                     view: selectedElementView,
                     elementName: selectedElementName,
-                    style: { borderColor: borderColor }
+                    style: Object.assign({}, _pendingStyle)
                 });
                 styleMenu.classList.remove('show');
             });
+
+            // ── Reset ─────────────────────────────────────────────────────
+            if (styleResetBtn) {
+                styleResetBtn.addEventListener('click', function() {
+                    if (!selectedElementName || !selectedElementView) return;
+                    vscode.postMessage({
+                        command: 'saveElementStyles',
+                        view: selectedElementView,
+                        elementName: selectedElementName,
+                        style: {}
+                    });
+                    styleMenu.classList.remove('show');
+                });
+            }
         })();
 
         // Handle export menu item clicks

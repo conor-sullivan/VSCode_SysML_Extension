@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "layouts": {
+    "elk": {
+      "positions": {
+        "Toaster": {
+          "x": 20,
+          "y": 45
+        },
+        "heatingElements": {
+          "x": 200,
+          "y": 45
+        },
+        "lever": {
+          "x": 380,
+          "y": 45
+        },
+        "timer": {
+          "x": 560,
+          "y": 45
+        },
+        "crumbTray": {
+          "x": 740,
+          "y": 45
+        },
+        "powerCord": {
+          "x": 920,
+          "y": 45
+        },
+        "HeatingElement": {
+          "x": 1100,
+          "y": 45
+        },
+        "Lever": {
+          "x": 1280,
+          "y": 45
+        },
+        "Timer": {
+          "x": 1460,
+          "y": 45
+        },
+        "CrumbTray": {
+          "x": 1640,
+          "y": 45
+        },
+        "PowerCord": {
+          "x": 20,
+          "y": 303
+        },
+        "Bread": {
+          "x": 200,
+          "y": 303
+        },
+        "Toast": {
+          "x": 380,
+          "y": 303
+        },
+        "PowerSource": {
+          "x": 560,
+          "y": 303
+        },
+        "ElectricalLoad": {
+          "x": 740,
+          "y": 303
+        },
+        "myToaster": {
+          "x": 920,
+          "y": 303
+        },
+        "ToastBread": {
+          "x": 20,
+          "y": 504
+        },
+        "lowerBread": {
+          "x": 200,
+          "y": 504
+        },
+        "heatElements": {
+          "x": 380,
+          "y": 504
+        },
+        "monitorTime": {
+          "x": 560,
+          "y": 504
+        },
+        "raiseToast": {
+          "x": 740,
+          "y": 504
+        },
+        "CleanToaster": {
+          "x": 1276.817138671875,
+          "y": 253.30517578125
+        },
+        "removeTray": {
+          "x": 1100,
+          "y": 504
+        },
+        "emptyTray": {
+          "x": 1280,
+          "y": 504
+        },
+        "replaceTray": {
+          "x": 1460,
+          "y": 504
+        },
+        "SafetyRequirements": {
+          "x": 20,
+          "y": 744
+        },
+        "autoShutoff": {
+          "x": 200,
+          "y": 744
+        },
+        "coolTouch": {
+          "x": 380,
+          "y": 744
+        },
+        "PerformanceRequirements": {
+          "x": 560,
+          "y": 744
+        },
+        "toastingTime": {
+          "x": 740,
+          "y": 744
+        },
+        "evenToasting": {
+          "x": 920,
+          "y": 744
+        },
+        "ControlInterface": {
+          "x": 20,
+          "y": 971
+        },
+        "bread": {
+          "x": 20,
+          "y": 1185
+        },
+        "toast": {
+          "x": 200,
+          "y": 1185
+        },
+        "LeverPosition": {
+          "x": 20,
+          "y": 1340
+        },
+        "BrownLevel": {
+          "x": 200,
+          "y": 1340
+        },
+        "toaster": {
+          "x": 740,
+          "y": 1340
+        },
+        "PowerConsumption": {
+          "x": 560,
+          "y": 1340
+        },
+        "PowerConnection": {
+          "x": 920,
+          "y": 1340
+        },
+        "FunctionAllocation": {
+          "x": 1100,
+          "y": 1340
+        },
+        "Manufacturer": {
+          "x": 1280,
+          "y": 1340
+        }
+      }
+    }
+  }
+}

@@ -7,8 +7,32 @@ export interface ElementPosition {
 
 /** Per-element style overrides (e.g. from the Style toolbar). Keyed by element name. */
 export interface ElementStyleOverrides {
+    /** Border/stroke color — hex, CSS var, or named color */
     borderColor?: string;
+    /** Node background fill color */
+    fillColor?: string;
+    /** Label and stereotype text color */
+    textColor?: string;
+    /** Stroke width in px (omit for type-based default) */
+    borderWidth?: number;
+    /** Stroke dash style */
+    borderStyle?: 'solid' | 'dashed' | 'dotted';
+    /** Group opacity 0–1 */
+    opacity?: number;
+    /** Top color-bar accent (defaults to typeColor) */
+    accentColor?: string;
+    /** Named quick-style preset — merged first, per-property overrides win */
+    preset?: string;
 }
+
+/** Named quick-style presets that map to ElementStyleOverrides. */
+export const ELEMENT_STYLE_PRESETS: Record<string, Omit<ElementStyleOverrides, 'preset'>> = {
+    warning:   { borderColor: 'var(--anvil-caution)',            borderWidth: 3, accentColor: 'var(--anvil-caution)' },
+    error:     { borderColor: 'var(--anvil-error)',              borderWidth: 3, accentColor: 'var(--anvil-error)' },
+    success:   { borderColor: 'var(--anvil-success)',            accentColor: 'var(--anvil-success)' },
+    highlight: { borderColor: 'var(--anvil-primary-background)', borderWidth: 3 },
+    muted:     { opacity: 0.4 },
+};
 
 export interface ViewLayout {
     positions: Record<string, ElementPosition>;
